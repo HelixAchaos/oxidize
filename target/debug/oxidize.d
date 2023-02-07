@@ -1,0 +1,1 @@
+/home/peter/projects/oxidize/target/debug/oxidize: /home/peter/projects/oxidize/src/ast.rs /home/peter/projects/oxidize/src/interpreter.rs /home/peter/projects/oxidize/src/lexer.rs /home/peter/projects/oxidize/src/main.rs /home/peter/projects/oxidize/src/parser.rs

@@ -1,0 +1,1 @@
+chumsky::combinator::Map<impl chumsky::Parser<char, <char as Character>::Collection, Error = chumsky::error::Simple<Token>> + Copy + Clone, [closure@src/parser.rs:7:18: 7:29], String>

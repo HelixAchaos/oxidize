@@ -1,0 +1,1 @@
+Padded<Just<char, char, <impl chumsky::Parser<Token, <Token as Character>::Collection, Error = _> + std::marker::Copy + Clone as chumsky::Parser<Token, String>>::Error>>

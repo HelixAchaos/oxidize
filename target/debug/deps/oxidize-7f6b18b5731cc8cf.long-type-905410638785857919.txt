@@ -1,0 +1,1 @@
+To<To<Then<Just<char, &str, chumsky::error::Simple<char>>, TakeUntil<Or<impl chumsky::Parser<char, (), Error = chumsky::error::Simple<char>> + Copy + Clone, Rewind<chumsky::primitive::End<chumsky::error::Simple<char>>>>>>, (&str, (Vec<char>, ())), ()>, (), Token>

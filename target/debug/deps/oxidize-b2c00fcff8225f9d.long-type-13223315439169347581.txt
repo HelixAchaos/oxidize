@@ -1,0 +1,1 @@
+chumsky::combinator::Map<chumsky::combinator::Map<Repeated<OneOf<_, &str, _>>, fn(Vec<_>) -> String, Vec<_>>, fn(char) -> Token {Token::Op}, String>
