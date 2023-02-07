@@ -1,1 +1,0 @@
-chumsky::combinator::Map<Then<Recursive<'_, char, Expr, chumsky::error::Simple<char>>, chumsky::primitive::End<chumsky::error::Simple<char>>>, fn((Expr, ())) -> Expr, (Expr, ())>

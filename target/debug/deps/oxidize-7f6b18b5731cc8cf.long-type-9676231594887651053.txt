@@ -1,1 +1,0 @@
-Padded<chumsky::combinator::Map<impl chumsky::Parser<String, <String as Character>::Collection, Error = _> + Copy + Clone, [closure@src/lexer.rs:17:14: 17:25], String>>

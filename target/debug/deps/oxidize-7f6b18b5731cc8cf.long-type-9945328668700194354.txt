@@ -1,1 +1,0 @@
-Or<Or<To<Padded<Just<char, char, _>>, char, fn(Box<Expr>) -> Expr>, To<Padded<Just<char, char, _>>, char, fn(Box<Expr>) -> Expr>>, To<chumsky::combinator::Map<Then<Padded<Just<char, char, _>>, impl chumsky::Parser<char, (), Error = _> + Clone + '_>, fn((char, ())), (char, ())>, (), fn(Box<Expr>) -> Expr>>

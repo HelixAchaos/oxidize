@@ -1,1 +1,0 @@
-To<chumsky::combinator::Map<Then<Padded<Just<char, char, chumsky::error::Simple<Token>>>, impl chumsky::Parser<char, (), Error = chumsky::error::Simple<Token>> + Clone + '_>, fn((char, ())), (char, ())>, (), fn(_) -> _>

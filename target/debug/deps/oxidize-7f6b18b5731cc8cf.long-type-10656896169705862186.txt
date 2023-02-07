@@ -1,1 +1,0 @@
-chumsky::combinator::Map<Padded<impl chumsky::Parser<Token, <Token as Character>::Collection, Error = _> + std::marker::Copy + Clone>, fn(String) -> Expr {Expr::Var}, String>

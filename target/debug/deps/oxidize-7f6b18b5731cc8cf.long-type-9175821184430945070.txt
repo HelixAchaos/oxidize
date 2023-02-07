@@ -1,1 +1,0 @@
-Then<Or<To<Padded<Just<char, char, chumsky::error::Simple<Token>>>, char, fn(_, _) -> _>, To<Padded<Just<char, char, chumsky::error::Simple<Token>>>, char, fn(_, _) -> _>>, _>
