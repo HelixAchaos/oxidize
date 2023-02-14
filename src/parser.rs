@@ -57,6 +57,7 @@ pub fn expr_parser() -> impl Parser<Token, Expr, Error = Simple<Token>> {
             .foldl(|lhs, (op, rhs)| op(Box::new(lhs), Box::new(rhs)));
 
         let ident = select! { Token::Var(ident) => ident };
+        
         let r#mutlet = just(Token::Let)
             .ignore_then(just(Token::Mut))
             .ignore_then(ident)

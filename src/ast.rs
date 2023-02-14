@@ -1,6 +1,6 @@
 #[derive(Debug)]
 pub enum Expr {
-    Num(f64),
+    Num(i64),
     Var(String),
 
     DeRef(Box<Self>),
