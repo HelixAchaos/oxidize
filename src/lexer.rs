@@ -10,6 +10,7 @@ pub enum Token {
     Let,
     Mut,
     In,
+    Unit,
 }
 
 pub fn lex() -> impl Parser<char, Vec<(Token, Span)>, Error = Simple<char>> + Clone {
@@ -27,6 +28,7 @@ pub fn lex() -> impl Parser<char, Vec<(Token, Span)>, Error = Simple<char>> + Cl
         "let" => Token::Let,
         "mut" => Token::Mut,
         "in" => Token::In,
+        "unit" => Token::Unit,
         _ => Token::Var(ident),
     });
 
