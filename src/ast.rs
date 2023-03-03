@@ -16,7 +16,7 @@ pub enum Expr {
     Sub(Box<Self>, Box<Self>),
     Mul(Box<Self>, Box<Self>),
     Div(Box<Self>, Box<Self>),
-    Assign(Box<Self>, Box<Self>),
+    Assign(Lhs, Box<Self>),
     Seq(Box<Self>, Box<Self>),
 
     Let {

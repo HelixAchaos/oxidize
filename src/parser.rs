@@ -15,10 +15,9 @@ pub fn expr_parser() -> impl Parser<Token, Expr, Error = Simple<Token>> {
             .to(Lhs::DeRef as fn(_) -> _)
             .repeated()
             .then(name)
-            .foldr(|op, rhs| op(Box::new(rhs)))
-            .map(Expr::Lvalue as fn(_) -> _);
+            .foldr(|op, rhs| op(Box::new(rhs)));
 
-        let atom = val.or(lhs);
+        let atom = val.or(lhs.clone().map(Expr::Lvalue as fn(_) -> _));
 
         let oppar = atom.or(expr.clone().delimited_by(
             just(Token::Op("(".to_string())),
@@ -64,18 +63,12 @@ pub fn expr_parser() -> impl Parser<Token, Expr, Error = Simple<Token>> {
             )
             .foldl(|lhs, (op, rhs)| op(Box::new(lhs), Box::new(rhs)));
 
-        let assign = sum
-            .clone()
-            .then(
-                just(Token::Op("=".to_string()))
-                    .to(Expr::Assign as fn(_, _) -> _)
-                    .then(sum)
-                    .repeated(),
-            )
-            .foldl(|lhs, (op, rhs)| op(Box::new(lhs), Box::new(rhs)));
+        let assign = (lhs.then(just(Token::Op("=".to_string())).to(Expr::Assign as fn(_, _) -> _)))
+            .repeated()
+            .then(sum)
+            .foldr(|(lhs, op), rhs| op(lhs, Box::new(rhs)));
 
         let seq = assign
-            .clone()
             .clone()
             .then(
                 just(Token::Op(";".to_string()))

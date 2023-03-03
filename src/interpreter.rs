@@ -40,7 +40,9 @@ fn cxt_write(vars: &mut Vec<Context>, name: String, ell: Address) -> Result<(), 
         cxt.insert(name, ell);
         Ok(())
     } else {
-        Err(format!("Attempted to write to empty context. How did this happen?"))?
+        Err(format!(
+            "Attempted to write to empty context. How did this happen?"
+        ))?
     }
 }
 
@@ -49,6 +51,24 @@ fn mem_lookup(memory: &Memory, ell: &Address, error: String) -> Result<ColoredVa
         Ok(cv.to_owned())
     } else {
         Err(error)
+    }
+}
+
+pub fn eval_lhs(
+    lhs: &Lhs,
+    vars: &mut Vec<Context>,
+    memory: &mut Memory,
+) -> Result<Address, String> {
+    match lhs {
+        Lhs::Var(name) => cxt_lookup(
+            vars,
+            name,
+            format!("Failed to find name {} in context", name),
+        ),
+        Lhs::DeRef(rec_lhs) => {
+            let (_, ell) = eval(&Expr::Lvalue(*(rec_lhs.to_owned())), vars, memory)?;
+            Ok(ell)
+        }
     }
 }
 
@@ -66,29 +86,14 @@ pub fn eval(
         Expr::Sub(a, b) => Ok((false, eval(a, vars, memory)?.1 - eval(b, vars, memory)?.1)),
         Expr::Mul(a, b) => Ok((false, eval(a, vars, memory)?.1 * eval(b, vars, memory)?.1)),
         Expr::Div(a, b) => Ok((false, eval(a, vars, memory)?.1 / eval(b, vars, memory)?.1)),
-        Expr::Lvalue(lhs) => match lhs {
-            Lhs::Var(name) => {
-                let ell = cxt_lookup(
-                    vars,
-                    name,
-                    format!("Failed to find name {} in context", name),
-                )?;
-                mem_lookup(
-                    memory,
-                    &ell,
-                    format!("Attempted to access an address that cannot be found"),
-                )
-            }
-            Lhs::DeRef(rec_lhs) => {
-                let (_, ell) = eval(&Expr::Lvalue(*(rec_lhs.to_owned())), vars, memory)?;
-                println!("ell: {}", ell);
-                mem_lookup(
-                    memory,
-                    &ell,
-                    format!("Attempted to dereference a pointer which points to some unknown value"),
-                )
-            }
-        },
+        Expr::Lvalue(lhs) => {
+            let ell = eval_lhs(lhs, vars, memory)?;
+            mem_lookup(
+                memory,
+                &ell,
+                format!("Attempted to access an address that cannot be found"),
+            )
+        }
         Expr::Seq(e1, e2) => {
             eval(e1, vars, memory)?;
             Ok(eval(e2, vars, memory)?)
@@ -123,7 +128,7 @@ pub fn eval(
 
             memory.insert(ell, (false, val));
             let output = eval(then, vars_prime, memory);
-            
+
             output
         }
         Expr::MutLet { name, rhs, then } => {
@@ -143,21 +148,32 @@ pub fn eval(
 
             output
         }
-        Expr::Assign(e1, e2) => {
-            println!("ASSSIGN {:?}   {:?} = {:?}", e1, eval(e1, vars, memory)?, eval(e2, vars, memory)?);
+        Expr::Assign(lhs, e2) => {
+            println!(
+                "ASSSIGN {:?}   {:?} = {:?}",
+                lhs,
+                eval_lhs(lhs, vars, memory)?,
+                eval(e2, vars, memory)?
+            );
 
             let (_, val) = eval(e2, vars, memory)?;
-            let (c_1, ell) = eval(e1, vars, memory)?;
+            let ell = eval_lhs(lhs, vars, memory)?;
+
+            let (c_1, _) = mem_lookup(
+                memory,
+                &ell,
+                format!("Attempted to access an address that cannot be found"),
+            )?;
 
             if !c_1 {
                 Err(format!(
                     "Attempted to assign to the pointed value of an immutably bound reference"
                 ))?
             }
-            println!("Write: {} {}", ell, val);
             memory.insert(ell, (true, val));
 
             // todo: return `(false, unit)` rather than `(false, val)`
+            println!("Write: l={};   v={};   m={:?}", ell, val, memory);
             Ok((false, val))
         }
     }
