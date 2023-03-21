@@ -1,12 +1,15 @@
 use std::collections::HashMap;
 
+use crate::interpreter::{eval, Context, Memory};
+use crate::typechecker::Gamma;
 use chumsky::{Parser, Stream};
-use interpreter::{eval, Context, Memory};
 
 mod ast;
 mod interpreter;
 mod lexer;
 mod parser;
+mod typechecker;
+mod types;
 
 // use chumsky::prelude::*;
 
@@ -46,11 +49,17 @@ fn main() -> Result<(), String> {
         }))?
     };
 
+    println!("AST:\n    {:?}", ast);
+
+    let mut gamma: Gamma = Gamma { vars: [].to_vec() };
+    let tast = typechecker::type_expr(&ast, &mut gamma)?;
+
+    println!("TAST:\n    {:?}", tast);
     let mut vars: Vec<Context> = [HashMap::new()].to_vec();
     let mut memory: Memory = HashMap::new();
-    let (c, v) = eval(&ast, &mut vars, &mut memory)?;
+    let (c, v) = eval(&tast, &mut vars, &mut memory)?;
 
-    println!("Execution:\n({}, {})", c, v);
-    println!("Memory:\n{:?}", memory);
+    println!("Execution:\n({:?}, {:?})", c, v);
+    // println!("Memory:\n{:?}", memory);
     Ok(())
 }

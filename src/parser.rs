@@ -1,23 +1,23 @@
-use crate::{ast::Expr, ast::Lhs, lexer::Token};
+use crate::{ast::EExpr, ast::ELhs, lexer::Token};
 use chumsky::prelude::*;
 
-pub fn expr_parser() -> impl Parser<Token, Expr, Error = Simple<Token>> {
-    let expr = recursive(|expr: Recursive<Token, Expr, Simple<Token>>| {
+pub fn expr_parser() -> impl Parser<Token, EExpr, Error = Simple<Token>> {
+    let expr = recursive(|expr: Recursive<Token, EExpr, Simple<Token>>| {
         let val = select! {
-            Token::Num(s) => Expr::Num(s.parse().unwrap()),
-            Token::Unit => Expr::Unit
+            Token::Num(s) => EExpr::Num(s.parse().unwrap()),
+            Token::Unit => EExpr::Unit
         };
 
         let name: chumsky::primitive::FilterMap<_, Simple<Token>> =
-            select! { Token::Var(s) => Lhs::Var(s) };
+            select! { Token::Var(s) => ELhs::Var(s) };
 
         let lhs = just(Token::Op("*".to_string()))
-            .to(Lhs::DeRef as fn(_) -> _)
+            .to(ELhs::DeRef as fn(_) -> _)
             .repeated()
             .then(name)
             .foldr(|op, rhs| op(Box::new(rhs)));
 
-        let atom = val.or(lhs.clone().map(Expr::Lvalue as fn(_) -> _));
+        let atom = val.or(lhs.clone().map(EExpr::Lvalue as fn(_) -> _));
 
         let oppar = atom.or(expr.clone().delimited_by(
             just(Token::Op("(".to_string())),
@@ -25,16 +25,16 @@ pub fn expr_parser() -> impl Parser<Token, Expr, Error = Simple<Token>> {
         ));
 
         let immut_ref = just::<Token, Token, Simple<Token>>(Token::Op("&".to_string()))
-            .ignore_then(select! { Token::Var(s) => Expr::Ref(s) });
+            .ignore_then(select! { Token::Var(s) => EExpr::Ref(s) });
 
         let mut_ref = just(Token::Op("&".to_string())).ignore_then(
-            just(Token::Mut).ignore_then(select! { Token::Var(s) => Expr::MutRef(s) }),
+            just(Token::Mut).ignore_then(select! { Token::Var(s) => EExpr::MutRef(s) }),
         );
 
         let refs = mut_ref.or(immut_ref);
 
         let unary = just(Token::Op("-".to_string()))
-            .to(Expr::Neg as fn(_) -> _)
+            .to(EExpr::Neg as fn(_) -> _)
             .repeated()
             .then(oppar)
             .foldr(|op, rhs| op(Box::new(rhs)));
@@ -45,8 +45,8 @@ pub fn expr_parser() -> impl Parser<Token, Expr, Error = Simple<Token>> {
             .clone()
             .then(
                 just(Token::Op("*".to_string()))
-                    .to(Expr::Mul as fn(_, _) -> _)
-                    .or(just(Token::Op("/".to_string())).to(Expr::Div as fn(_, _) -> _))
+                    .to(EExpr::Mul as fn(_, _) -> _)
+                    .or(just(Token::Op("/".to_string())).to(EExpr::Div as fn(_, _) -> _))
                     .then(trunary)
                     .repeated(),
             )
@@ -56,23 +56,24 @@ pub fn expr_parser() -> impl Parser<Token, Expr, Error = Simple<Token>> {
             .clone()
             .then(
                 just(Token::Op("+".to_string()))
-                    .to(Expr::Add as fn(_, _) -> _)
-                    .or(just(Token::Op("-".to_string())).to(Expr::Sub as fn(_, _) -> _))
+                    .to(EExpr::Add as fn(_, _) -> _)
+                    .or(just(Token::Op("-".to_string())).to(EExpr::Sub as fn(_, _) -> _))
                     .then(product)
                     .repeated(),
             )
             .foldl(|lhs, (op, rhs)| op(Box::new(lhs), Box::new(rhs)));
 
-        let assign = (lhs.then(just(Token::Op("=".to_string())).to(Expr::Assign as fn(_, _) -> _)))
-            .repeated()
-            .then(sum)
-            .foldr(|(lhs, op), rhs| op(lhs, Box::new(rhs)));
+        let assign = (lhs
+            .then(just(Token::Op("=".to_string())).to(EExpr::Assign as fn(_, _) -> _)))
+        .repeated()
+        .then(sum)
+        .foldr(|(lhs, op), rhs| op(lhs, Box::new(rhs)));
 
         let seq = assign
             .clone()
             .then(
                 just(Token::Op(";".to_string()))
-                    .to(Expr::Seq as fn(_, _) -> _)
+                    .to(EExpr::Seq as fn(_, _) -> _)
                     .then(assign)
                     .repeated(),
             )
@@ -86,7 +87,7 @@ pub fn expr_parser() -> impl Parser<Token, Expr, Error = Simple<Token>> {
             .then(expr.clone())
             .then_ignore(just(Token::In))
             .then(expr.clone())
-            .map(|((name, rhs), then)| Expr::Let {
+            .map(|((name, rhs), then)| EExpr::Let {
                 name,
                 rhs: Box::new(rhs),
                 then: Box::new(then),
@@ -99,7 +100,7 @@ pub fn expr_parser() -> impl Parser<Token, Expr, Error = Simple<Token>> {
             .then(expr.clone())
             .then_ignore(just(Token::In))
             .then(expr.clone())
-            .map(|((name, rhs), then)| Expr::MutLet {
+            .map(|((name, rhs), then)| EExpr::MutLet {
                 name,
                 rhs: Box::new(rhs),
                 then: Box::new(then),

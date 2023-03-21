@@ -1,14 +1,20 @@
 use std::collections::HashMap;
 use std::iter;
 
-use crate::ast::{Expr, Lhs};
+use crate::ast::{TExpr, TLhs};
 
-type Value = i64;
+type Var = String;
+type Address = i64;
+
+#[derive(Debug, Clone)]
+pub enum Value {
+    Int(i64),
+    Unit,
+    Ref(Address),
+}
 type ColoredValue = (bool, Value); // false -> pointed memory cannot be modified
 pub type Memory = HashMap<Address, ColoredValue>; // Delta
-type Var = String;
-type Address = Value;
-pub type Context = HashMap<Var, Value>; // Mu
+pub type Context = HashMap<Var, Address>; // Mu
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -18,7 +24,7 @@ fn generate_address() -> Address {
     result as i64
 }
 
-fn cxt_lookup(vars: &Vec<Context>, name: &String, error: String) -> Result<Address, String> {
+fn ctx_lookup(vars: &Vec<Context>, name: &String, error: String) -> Result<Address, String> {
     if let Some(ell) = vars.into_iter().rev().find_map(|scope| scope.get(name)) {
         Ok(ell.to_owned())
     } else {
@@ -26,18 +32,18 @@ fn cxt_lookup(vars: &Vec<Context>, name: &String, error: String) -> Result<Addre
     }
 }
 
-fn cxt_new_scope(vars: Vec<Context>) -> Vec<Context> {
+fn ctx_new_scope(vars: Vec<Context>) -> Vec<Context> {
     vars.into_iter().chain(iter::once(HashMap::new())).collect()
 }
 
-// fn cxt_pop_scope(vars: Vec<Context>) -> Vec<Context> {
+// fn ctx_pop_scope(vars: Vec<Context>) -> Vec<Context> {
 //     let len = vars.len();
 //     vars.into_iter().enumerate().filter(|(i, _)| *i != len - 1).map(|(_, e)| e).collect()
 // }
 
-fn cxt_write(vars: &mut Vec<Context>, name: String, ell: Address) -> Result<(), String> {
-    if let Some(cxt) = vars.last_mut() {
-        cxt.insert(name, ell);
+fn ctx_write(vars: &mut Vec<Context>, name: String, ell: Address) -> Result<(), String> {
+    if let Some(ctx) = vars.last_mut() {
+        ctx.insert(name, ell);
         Ok(())
     } else {
         Err(format!(
@@ -55,38 +61,59 @@ fn mem_lookup(memory: &Memory, ell: &Address, error: String) -> Result<ColoredVa
 }
 
 pub fn eval_lhs(
-    lhs: &Lhs,
+    lhs: &TLhs,
     vars: &mut Vec<Context>,
     memory: &mut Memory,
 ) -> Result<Address, String> {
     match lhs {
-        Lhs::Var(name) => cxt_lookup(
+        TLhs::Var(_t, name) => ctx_lookup(
             vars,
             name,
             format!("Failed to find name {} in context", name),
         ),
-        Lhs::DeRef(rec_lhs) => {
-            let (_, ell) = eval(&Expr::Lvalue(*(rec_lhs.to_owned())), vars, memory)?;
-            Ok(ell)
+        TLhs::DeRef(t, rec_lhs) => {
+            let (_, v) = eval(
+                &TExpr::Lvalue(t.to_owned(), *(rec_lhs.to_owned())),
+                vars,
+                memory,
+            )?;
+            match v {
+                Value::Ref(ell) => Ok(ell),
+                _ => Err(format!("You can't dereference a non-reference")),
+            }
         }
     }
 }
 
 pub fn eval(
-    expr: &Expr,
+    expr: &TExpr,
     vars: &mut Vec<Context>,
     memory: &mut Memory,
 ) -> Result<ColoredValue, String> {
-    println!("Expr {:?}\nVars: {:?}\nMem: {:?}\n", expr, vars, memory);
     match expr {
-        Expr::Unit => todo!("type checking"),
-        Expr::Num(x) => Ok((false, x.to_owned())),
-        Expr::Neg(a) => Ok((false, -eval(a, vars, memory)?.1)),
-        Expr::Add(a, b) => Ok((false, eval(a, vars, memory)?.1 + eval(b, vars, memory)?.1)),
-        Expr::Sub(a, b) => Ok((false, eval(a, vars, memory)?.1 - eval(b, vars, memory)?.1)),
-        Expr::Mul(a, b) => Ok((false, eval(a, vars, memory)?.1 * eval(b, vars, memory)?.1)),
-        Expr::Div(a, b) => Ok((false, eval(a, vars, memory)?.1 / eval(b, vars, memory)?.1)),
-        Expr::Lvalue(lhs) => {
+        TExpr::Unit(_t) => Ok((false, Value::Unit)),
+        TExpr::Num(_t, x) => Ok((false, Value::Int(x.to_owned()))),
+        TExpr::Neg(_t, a) => match eval(a, vars, memory)?.1 {
+            Value::Int(i) => Ok((false, Value::Int(-i))),
+            _ => panic!("Typechecker should've prevented negation of non-integer"),
+        },
+        TExpr::Add(_t, a, b) => match (eval(a, vars, memory)?.1, eval(b, vars, memory)?.1) {
+            (Value::Int(i1), Value::Int(i2)) => Ok((false, Value::Int(i1 + i2))),
+            _ => panic!("Typechecker should've prevented addition involving non-integers"),
+        },
+        TExpr::Sub(_t, a, b) => match (eval(a, vars, memory)?.1, eval(b, vars, memory)?.1) {
+            (Value::Int(i1), Value::Int(i2)) => Ok((false, Value::Int(i1 - i2))),
+            _ => panic!("Typechecker should've prevented subtraction involving non-integers"),
+        },
+        TExpr::Mul(_t, a, b) => match (eval(a, vars, memory)?.1, eval(b, vars, memory)?.1) {
+            (Value::Int(i1), Value::Int(i2)) => Ok((false, Value::Int(i1 + i2))),
+            _ => panic!("Typechecker should've prevented multiplication involving non-integers"),
+        },
+        TExpr::Div(_t, a, b) => match (eval(a, vars, memory)?.1, eval(b, vars, memory)?.1) {
+            (Value::Int(i1), Value::Int(i2)) => Ok((false, Value::Int(i1 / i2))),
+            _ => panic!("Typechecker should've prevented division involving non-integers"),
+        },
+        TExpr::Lvalue(_t, lhs) => {
             let ell = eval_lhs(lhs, vars, memory)?;
             mem_lookup(
                 memory,
@@ -94,27 +121,32 @@ pub fn eval(
                 format!("Attempted to access an address that cannot be found"),
             )
         }
-        Expr::Seq(e1, e2) => {
+        TExpr::Seq(_t, e1, e2) => {
             eval(e1, vars, memory)?;
             Ok(eval(e2, vars, memory)?)
         }
-        Expr::Ref(name) => {
-            let ell = cxt_lookup(
+        TExpr::Ref(_t, name) => {
+            let ell = ctx_lookup(
                 vars,
                 name,
                 format!("Attempted to reference a variable that is not bound"),
             )?;
-            Ok((false, ell.to_owned()))
+            Ok((false, Value::Ref(ell.to_owned())))
         }
-        Expr::MutRef(name) => {
-            let ell = cxt_lookup(
+        TExpr::MutRef(_t, name) => {
+            let ell = ctx_lookup(
                 vars,
                 name,
                 format!("Attempted to reference a variable that is not bound"),
             )?;
-            Ok((true, ell.to_owned()))
+            Ok((true, Value::Ref(ell.to_owned())))
         }
-        Expr::Let { name, rhs, then } => {
+        TExpr::Let {
+            name,
+            rhs,
+            then,
+            t: _,
+        } => {
             if vars.into_iter().any(|scope| scope.contains_key(name)) {
                 Err(format!("Attempted to bind to already bound name: {}", name))?
             }
@@ -123,15 +155,20 @@ pub fn eval(
 
             let (_, val) = eval(rhs, vars, memory)?;
 
-            let vars_prime = &mut cxt_new_scope(vars.to_vec());
-            cxt_write(vars_prime, name.to_owned(), ell)?;
+            let vars_prime = &mut ctx_new_scope(vars.to_vec());
+            ctx_write(vars_prime, name.to_owned(), ell)?;
 
             memory.insert(ell, (false, val));
             let output = eval(then, vars_prime, memory);
 
             output
         }
-        Expr::MutLet { name, rhs, then } => {
+        TExpr::MutLet {
+            name,
+            rhs,
+            then,
+            t: _,
+        } => {
             if vars.into_iter().any(|scope| scope.contains_key(name)) {
                 Err(format!("Attempted to bind to already bound name: {}", name))?
             }
@@ -140,22 +177,15 @@ pub fn eval(
 
             let (_, val) = eval(rhs, vars, memory)?;
 
-            let vars_prime = &mut cxt_new_scope(vars.to_vec());
-            cxt_write(vars_prime, name.to_owned(), ell)?;
+            let vars_prime = &mut ctx_new_scope(vars.to_vec());
+            ctx_write(vars_prime, name.to_owned(), ell)?;
 
             memory.insert(ell, (true, val));
             let output = eval(then, vars_prime, memory);
 
             output
         }
-        Expr::Assign(lhs, e2) => {
-            println!(
-                "ASSSIGN {:?}   {:?} = {:?}",
-                lhs,
-                eval_lhs(lhs, vars, memory)?,
-                eval(e2, vars, memory)?
-            );
-
+        TExpr::Assign(_t, lhs, e2) => {
             let (_, val) = eval(e2, vars, memory)?;
             let ell = eval_lhs(lhs, vars, memory)?;
 
@@ -170,10 +200,10 @@ pub fn eval(
                     "Attempted to assign to the pointed value of an immutably bound reference"
                 ))?
             }
-            memory.insert(ell, (true, val));
+            memory.insert(ell, (true, val.clone()));
 
             // todo: return `(false, unit)` rather than `(false, val)`
-            println!("Write: l={};   v={};   m={:?}", ell, val, memory);
+            // println!("Write: l={:?};   v={:?};   m={:?}", ell, val, memory);
             Ok((false, val))
         }
     }
