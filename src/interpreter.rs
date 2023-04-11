@@ -2,12 +2,11 @@ use std::collections::HashMap;
 use std::iter;
 
 use crate::ast::{TExpr, TLhs};
-
-type Var = String;
-type Address = i64;
+use crate::types::{Address, Var};
 
 #[derive(Debug, Clone)]
 pub enum Value {
+    Bool(bool),
     Int(i64),
     Unit,
     Ref(Address),
@@ -97,6 +96,14 @@ pub fn eval(
             Value::Int(i) => Ok((false, Value::Int(-i))),
             _ => panic!("Typechecker should've prevented negation of non-integer"),
         },
+        TExpr::Gt(_t, a, b) => match (eval(a, vars, memory)?.1, eval(b, vars, memory)?.1) {
+            (Value::Int(i1), Value::Int(i2)) => Ok((false, Value::Bool(i1 > i2))),
+            _ => panic!("Typechecker should've prevented comparison involving non-integers"),
+        },
+        TExpr::Lt(_t, a, b) => match (eval(a, vars, memory)?.1, eval(b, vars, memory)?.1) {
+            (Value::Int(i1), Value::Int(i2)) => Ok((false, Value::Bool(i1 < i2))),
+            _ => panic!("Typechecker should've prevented comparison involving non-integers"),
+        },
         TExpr::Add(_t, a, b) => match (eval(a, vars, memory)?.1, eval(b, vars, memory)?.1) {
             (Value::Int(i1), Value::Int(i2)) => Ok((false, Value::Int(i1 + i2))),
             _ => panic!("Typechecker should've prevented addition involving non-integers"),
@@ -113,6 +120,18 @@ pub fn eval(
             (Value::Int(i1), Value::Int(i2)) => Ok((false, Value::Int(i1 / i2))),
             _ => panic!("Typechecker should've prevented division involving non-integers"),
         },
+        TExpr::Cond(_t, cond, then_expr, else_expr) => {
+            match eval(cond, vars, memory)?.1 {
+                Value::Bool(b) => {
+                    if b {
+                        eval(then_expr, vars, memory)
+                    } else {
+                        eval(else_expr, vars, memory)
+                    }
+                }
+                _ => panic!("Typechecker should've prevented if-condition not being of type bool"),
+            }
+        }
         TExpr::Lvalue(_t, lhs) => {
             let ell = eval_lhs(lhs, vars, memory)?;
             mem_lookup(
@@ -202,9 +221,7 @@ pub fn eval(
             }
             memory.insert(ell, (true, val.clone()));
 
-            // todo: return `(false, unit)` rather than `(false, val)`
-            // println!("Write: l={:?};   v={:?};   m={:?}", ell, val, memory);
-            Ok((false, val))
+            Ok((false, Value::Unit))
         }
     }
 }

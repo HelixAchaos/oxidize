@@ -1,7 +1,8 @@
 use std::collections::HashMap;
 
 use crate::interpreter::{eval, Context, Memory};
-use crate::typechecker::Gamma;
+use crate::typechecker::{Eta, Gamma, Mu};
+// use crate::types::Type;
 use chumsky::{Parser, Stream};
 
 mod ast;
@@ -52,7 +53,9 @@ fn main() -> Result<(), String> {
     println!("AST:\n    {:?}", ast);
 
     let mut gamma: Gamma = Gamma { vars: [].to_vec() };
-    let tast = typechecker::type_expr(&ast, &mut gamma)?;
+    let mut eta: Eta = Eta::new();
+    let mut mu: Mu = Mu::new();
+    let (tast, _s) = typechecker::type_expr(&ast, &mut gamma, &mut eta, &mut mu)?;
 
     println!("TAST:\n    {:?}", tast);
     let mut vars: Vec<Context> = [HashMap::new()].to_vec();

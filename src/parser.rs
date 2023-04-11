@@ -63,10 +63,31 @@ pub fn expr_parser() -> impl Parser<Token, EExpr, Error = Simple<Token>> {
             )
             .foldl(|lhs, (op, rhs)| op(Box::new(lhs), Box::new(rhs)));
 
+        let cmp = sum
+            .clone()
+            .then(
+                just(Token::Op(">".to_string()))
+                    .to(EExpr::Gt as fn(_, _) -> _)
+                    .or(just(Token::Op("<".to_string())).to(EExpr::Lt as fn(_, _) -> _))
+                    .then(sum)
+                    .repeated(),
+            )
+            .foldl(|lhs, (op, rhs)| op(Box::new(lhs), Box::new(rhs)));
+
+        let ifexpr = cmp.clone().or(just(Token::If)
+            .ignore_then(cmp.clone())
+            .then_ignore(just(Token::Then))
+            .then(cmp.clone())
+            .then_ignore(just(Token::Else))
+            .then(cmp.clone())
+            .map(|((cond, then_expr), else_expr)| {
+                EExpr::Cond(Box::new(cond), Box::new(then_expr), Box::new(else_expr))
+            }));
+
         let assign = (lhs
             .then(just(Token::Op("=".to_string())).to(EExpr::Assign as fn(_, _) -> _)))
         .repeated()
-        .then(sum)
+        .then(ifexpr)
         .foldr(|(lhs, op), rhs| op(lhs, Box::new(rhs)));
 
         let seq = assign

@@ -11,6 +11,9 @@ pub enum Token {
     Mut,
     In,
     Unit,
+    If,
+    Then,
+    Else,
 }
 
 pub fn lex() -> impl Parser<char, Vec<(Token, Span)>, Error = Simple<char>> + Clone {
@@ -18,7 +21,7 @@ pub fn lex() -> impl Parser<char, Vec<(Token, Span)>, Error = Simple<char>> + Cl
 
     // let newline = just("\n").or(just("\r\n")).to(Token::Eol);
 
-    let op = one_of("=+-*/()&;")
+    let op = one_of("=+-*/()&;<>")
         .repeated()
         .exactly(1)
         .collect::<String>()
@@ -29,6 +32,9 @@ pub fn lex() -> impl Parser<char, Vec<(Token, Span)>, Error = Simple<char>> + Cl
         "mut" => Token::Mut,
         "in" => Token::In,
         "unit" => Token::Unit,
+        "if" => Token::If,
+        "then" => Token::Then,
+        "else" => Token::Else,
         _ => Token::Var(ident),
     });
 
