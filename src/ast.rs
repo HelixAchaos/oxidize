@@ -21,6 +21,7 @@ pub enum EExpr {
     Mul(Box<Self>, Box<Self>),
     Div(Box<Self>, Box<Self>),
     Cond(Box<Self>, Box<Self>, Box<Self>),
+    Tuple(Vec<Self>),
     Assign(ELhs, Box<Self>),
     Seq(Box<Self>, Box<Self>),
 
@@ -57,6 +58,7 @@ pub enum TExpr {
     Mul(Type, Box<Self>, Box<Self>),
     Div(Type, Box<Self>, Box<Self>),
     Cond(Type, Box<Self>, Box<Self>, Box<Self>),
+    Tuple(Type, Vec<Self>),
     Assign(Type, TLhs, Box<Self>),
     Seq(Type, Box<Self>, Box<Self>),
 
@@ -101,6 +103,7 @@ impl TExpr {
             Mul(t, _, _) => t,
             Div(t, _, _) => t,
             Cond(t, _, _, _) => t,
+            Tuple(t, _) => t,
             Assign(t, _, _) => t,
             Seq(t, _, _) => t,
             Let {

@@ -84,10 +84,22 @@ pub fn expr_parser() -> impl Parser<Token, EExpr, Error = Simple<Token>> {
                 EExpr::Cond(Box::new(cond), Box::new(then_expr), Box::new(else_expr))
             }));
 
+        let tuple = ifexpr
+            .clone()
+            .separated_by(just(Token::Op(",".to_string())))
+            .allow_trailing()
+            .delimited_by(
+                just(Token::Op("[".to_string())),
+                just(Token::Op("]".to_string())),
+            )
+            .map(|v| EExpr::Tuple(v));
+
+        let normal_expr = ifexpr.or(tuple);
+
         let assign = (lhs
             .then(just(Token::Op("=".to_string())).to(EExpr::Assign as fn(_, _) -> _)))
         .repeated()
-        .then(ifexpr)
+        .then(normal_expr)
         .foldr(|(lhs, op), rhs| op(lhs, Box::new(rhs)));
 
         let seq = assign

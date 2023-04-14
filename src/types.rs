@@ -7,4 +7,5 @@ pub enum Type {
     Int,
     Unit,
     Ref(bool, Box<Type>, Address),
+    Tuple(Vec<Type>),
 }

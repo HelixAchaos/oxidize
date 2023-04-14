@@ -67,10 +67,9 @@ pub fn type_lhs(lhs: &ELhs, ctx: &Gamma, eta: &Eta, mu: &Mu) -> Result<TLhs, Str
             ))
         }
         ELhs::DeRef(rec_lhs) => {
-            let mut immut_ctx = ctx.clone();
             match type_expr(
                 &EExpr::Lvalue(*rec_lhs.to_owned()),
-                &mut immut_ctx,
+                &mut ctx.clone(),
                 &mut eta.clone(),
                 &mut mu.clone(),
             )?
@@ -179,20 +178,44 @@ pub fn type_expr(
         EExpr::Cond(cond, then_exp, else_exp) => {
             let (cond, _) = type_expr(&*cond.to_owned(), ctx, eta, mu)?;
             if cond.extract_type() != Type::Bool {
-                Err(format!("If-expr conditions must of type bool not of type {:?}", cond.extract_type()))?
+                Err(format!(
+                    "If-expr conditions must of type bool not of type {:?}",
+                    cond.extract_type()
+                ))?
             }
-            
+
             let (then_exp, s_1) = type_expr(&*then_exp.to_owned(), ctx, eta, mu)?;
             let (else_exp, s_2) = type_expr(&*else_exp.to_owned(), ctx, eta, mu)?;
-            
+
             let then_tau = then_exp.extract_type();
             let else_tau = else_exp.extract_type();
             if then_tau != else_tau {
-                Err(format!("If-expr branches must have the same type. They instead are of {:?} and {:?}", then_tau, else_tau))?
+                Err(format!(
+                    "If-expr branches must have the same type. They instead are of {:?} and {:?}",
+                    then_tau, else_tau
+                ))?
             }
-            
 
-            Ok((TExpr::Cond(then_tau, Box::new(cond), Box::new(then_exp), Box::new(else_exp)), s_1.union(&s_2).map(|a| a.to_owned()).collect::<S>()))
+            Ok((
+                TExpr::Cond(
+                    then_tau,
+                    Box::new(cond),
+                    Box::new(then_exp),
+                    Box::new(else_exp),
+                ),
+                s_1.union(&s_2).map(|a| a.to_owned()).collect::<S>(),
+            ))
+        }
+        EExpr::Tuple(exprs) => {
+            let (texprs, ss): (Vec<_>, Vec<_>) = exprs
+                .into_iter()
+                .map(|e| type_expr(e, ctx, eta, mu))
+                .collect::<Result<Vec<_>, _>>()?
+                .into_iter()
+                .unzip();
+            let t = Type::Tuple(texprs.iter().map(TExpr::extract_type).collect());
+            let s = ss.into_iter().flatten().collect::<HashSet<_>>();
+            Ok((TExpr::Tuple(t, texprs), s))
         }
         EExpr::Lvalue(lhs) => {
             let lhs = type_lhs(lhs, ctx, eta, mu)?;
@@ -205,9 +228,10 @@ pub fn type_expr(
             };
             match lhs.extract_type() {
                 Type::Ref(_, tau, ell) => {
-                    if eta.clone().into_values().any(|s| {
-                        s.contains(&(false, ell.to_owned())) || s.contains(&(true, ell.to_owned()))
-                    }) {
+                    if eta
+                        .values()
+                        .any(|s| s.contains(&(false, ell)) || s.contains(&(true, ell)))
+                    {
                         Err(format!("cannot move out of `lhs` because it is borrowed / behind a shared reference"))?
                     } else {
                         let s = eta.get(&ell).unwrap();
@@ -228,7 +252,7 @@ pub fn type_expr(
         EExpr::Ref(name) => {
             let (_, tau) = ctx.get(name)?;
             let ell = mu.get(name).unwrap().to_owned();
-            if eta.clone().into_values().any(|s| s.contains(&(true, ell))) {
+            if eta.values().any(|s| s.contains(&(true, ell))) {
                 Err(format!(
                     "cannot borrow `{}` as immutable because it is also borrowed as mutable",
                     name
@@ -245,7 +269,7 @@ pub fn type_expr(
         }
         EExpr::MutRef(name) => {
             let (m, tau) = ctx.get(name)?;
-            if !m.to_owned() {
+            if !m {
                 Err(format!(
                     "cannot borrow `{}` as mutable, as it is not declared as mutable",
                     name
@@ -253,13 +277,13 @@ pub fn type_expr(
             }
 
             let ell = mu.get(name).unwrap().to_owned();
-            if eta.clone().into_values().any(|s| s.contains(&(false, ell))) {
+            if eta.values().any(|s| s.contains(&(false, ell))) {
                 Err(format!(
                     "cannot borrow `{}` as mutable because it is also borrowed as immutable",
                     name
                 ))?
             };
-            if eta.clone().into_values().any(|s| s.contains(&(true, ell))) {
+            if eta.values().any(|s| s.contains(&(true, ell))) {
                 Err(format!(
                     "cannot borrow `{}` as mutable more than once at a time",
                     name

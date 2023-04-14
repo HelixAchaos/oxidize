@@ -8,6 +8,7 @@ use crate::types::{Address, Var};
 pub enum Value {
     Bool(bool),
     Int(i64),
+    // Tuple(Vec<Value>),
     Unit,
     Ref(Address),
 }
@@ -120,17 +121,27 @@ pub fn eval(
             (Value::Int(i1), Value::Int(i2)) => Ok((false, Value::Int(i1 / i2))),
             _ => panic!("Typechecker should've prevented division involving non-integers"),
         },
-        TExpr::Cond(_t, cond, then_expr, else_expr) => {
-            match eval(cond, vars, memory)?.1 {
-                Value::Bool(b) => {
-                    if b {
-                        eval(then_expr, vars, memory)
-                    } else {
-                        eval(else_expr, vars, memory)
-                    }
+        TExpr::Cond(_t, cond, then_expr, else_expr) => match eval(cond, vars, memory)?.1 {
+            Value::Bool(b) => {
+                if b {
+                    eval(then_expr, vars, memory)
+                } else {
+                    eval(else_expr, vars, memory)
                 }
-                _ => panic!("Typechecker should've prevented if-condition not being of type bool"),
             }
+            _ => panic!("Typechecker should've prevented if-condition not being of type bool"),
+        },
+        TExpr::Tuple(_t, _texprs) => {
+            // Ok((, Value::Tuple(
+            //     texprs
+            //         .into_iter()
+            //         .map(|texpr| eval(texpr, vars, memory))
+            //         .collect::<Result<_, String>>()?
+            //         .into_iter()
+            //         .map(|t| t.1)
+            //         .collect(),
+            // )))
+            todo!()
         }
         TExpr::Lvalue(_t, lhs) => {
             let ell = eval_lhs(lhs, vars, memory)?;

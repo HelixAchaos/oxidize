@@ -21,7 +21,7 @@ pub fn lex() -> impl Parser<char, Vec<(Token, Span)>, Error = Simple<char>> + Cl
 
     // let newline = just("\n").or(just("\r\n")).to(Token::Eol);
 
-    let op = one_of("=+-*/()&;<>")
+    let op = one_of("=+-*/()&;<>[],")
         .repeated()
         .exactly(1)
         .collect::<String>()
