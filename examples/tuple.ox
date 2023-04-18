@@ -1,1 +1,2 @@
-let a = [1, 2] in 3
+let mut a = [4, 6] in
+    a.1 = 2; a

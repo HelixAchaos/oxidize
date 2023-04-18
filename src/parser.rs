@@ -3,21 +3,48 @@ use chumsky::prelude::*;
 
 pub fn expr_parser() -> impl Parser<Token, EExpr, Error = Simple<Token>> {
     let expr = recursive(|expr: Recursive<Token, EExpr, Simple<Token>>| {
-        let val = select! {
+        let num = select! {
             Token::Num(s) => EExpr::Num(s.parse().unwrap()),
-            Token::Unit => EExpr::Unit
         };
 
-        let name: chumsky::primitive::FilterMap<_, Simple<Token>> =
-            select! { Token::Var(s) => ELhs::Var(s) };
+        let unit = just(Token::Unit).to(EExpr::Unit);
 
-        let lhs = just(Token::Op("*".to_string()))
-            .to(ELhs::DeRef as fn(_) -> _)
-            .repeated()
-            .then(name)
-            .foldr(|op, rhs| op(Box::new(rhs)));
+        let lhs = recursive(|lhs: Recursive<Token, ELhs, Simple<Token>>| {
+            let name: chumsky::primitive::FilterMap<_, Simple<Token>> =
+                select! { Token::Var(s) => ELhs::Var(s) };
 
-        let atom = val.or(lhs.clone().map(EExpr::Lvalue as fn(_) -> _));
+            let oppar = name.or(lhs.clone().delimited_by(
+                just(Token::Op("(".to_string())),
+                just(Token::Op(")".to_string())),
+            ));
+
+            let nat_num_derefs = just(Token::Op("*".to_string()))
+                .to(ELhs::DeRef as fn(_) -> _)
+                .repeated()
+                .then(oppar)
+                .foldr(|op, rhs| op(Box::new(rhs)));
+
+            let digits = select! {
+                Token::Num(s) => s.parse().unwrap(),
+            };
+
+            let indexing = nat_num_derefs
+                .then(
+                    just(Token::Op(".".to_string()))
+                        .to(ELhs::Index as fn(_, _) -> _)
+                        .then(digits)
+                        .repeated(),
+                )
+                .foldl(|lhs, (op, rhs)| op(Box::new(lhs), rhs));
+
+            indexing
+        });
+
+        let atom = lhs
+            .clone()
+            .map(EExpr::Lvalue as fn(_) -> _)
+            .or(num)
+            .or(unit);
 
         let oppar = atom.or(expr.clone().delimited_by(
             just(Token::Op("(".to_string())),

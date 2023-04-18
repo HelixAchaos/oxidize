@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use crate::interpreter::{eval, Context, Memory};
+use crate::interpreter::{eval, Context, Delta};
 use crate::typechecker::{Eta, Gamma, Mu};
 // use crate::types::Type;
 use chumsky::{Parser, Stream};
@@ -33,10 +33,14 @@ fn main() -> Result<(), String> {
         Err("".to_string())?
     };
 
+    println!("asAsfSDFdf");
     let len = src.chars().count();
+    println!("BBBasdf");
 
     let (ast, parse_errs) =
         parser::expr_parser().parse_recovery(Stream::from_iter(len..len + 1, tokens.into_iter()));
+
+    println!("CCasdf");
 
     let ast = if parse_errs.is_empty() {
         if let Some(ast) = ast {
@@ -52,15 +56,19 @@ fn main() -> Result<(), String> {
 
     println!("AST:\n    {:?}", ast);
 
-    let mut gamma: Gamma = Gamma { vars: [].to_vec() };
-    let mut eta: Eta = Eta::new();
+    let mut gamma: Gamma = Gamma { vars: Vec::new() };
+    let mut eta: Eta = Eta {
+        loans: HashMap::new(),
+    };
     let mut mu: Mu = Mu::new();
-    let (tast, _s) = typechecker::type_expr(&ast, &mut gamma, &mut eta, &mut mu)?;
+    let tast = typechecker::type_expr(ast, &mut gamma, &mut eta, &mut mu)?.extract_tast();
 
     println!("TAST:\n    {:?}", tast);
-    let mut vars: Vec<Context> = [HashMap::new()].to_vec();
-    let mut memory: Memory = HashMap::new();
-    let (c, v) = eval(&tast, &mut vars, &mut memory)?;
+    let mut vars: Vec<Context> = vec![HashMap::new()];
+    let mut delta: Delta = Delta {
+        memory: HashMap::new(),
+    };
+    let (c, v) = eval(tast, &mut vars, &mut delta)?;
 
     println!("Execution:\n({:?}, {:?})", c, v);
     // println!("Memory:\n{:?}", memory);
