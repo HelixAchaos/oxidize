@@ -23,9 +23,10 @@ impl Delta {
     fn get(&self, ell: &Address) -> Option<ColoredValue> {
         let val = self.memory.get(&ell).cloned();
         if let Some((b, Value::Tuple(values))) = val.clone() {
-            let t: Vec<_> = (1..=values.len()).map(|offset| self.get(&(ell + offset as u64)).unwrap().1).collect(); 
+            let t: Vec<_> = (1..=values.len())
+                .map(|offset| self.get(&(ell + offset as u64)).unwrap().1)
+                .collect();
             Some((b, Value::Tuple(t)))
-
         } else {
             val
         }
@@ -200,94 +201,117 @@ pub fn eval(
             rhs,
             then,
             t: _,
-        } => {
-            if vars.into_iter().any(|scope| scope.contains_key(&name)) {
-                Err(format!("Attempted to bind to already bound name: {}", name))?
-            }
-
-            let (_, val) = eval(*rhs, vars, delta)?;
-            let vars_prime = &mut ctx_new_scope(vars.to_vec());
-            let ell = generate_address();
-            ctx_write(vars_prime, name.to_owned(), ell)?;
-
-            let cvals: Vec<ColoredValue> = if let Value::Tuple(values) = val.clone() {
-                for _ in 2..values.len() {
-                    let _ = generate_address();
-                }
-                iter::once(val.clone())
-                    .chain(values)
-                    .map(|v| (false, v))
-                    .collect()
-            } else {
-                vec![(false, val.clone())]
-            };
-
-            delta.insert(ell, cvals);
-            let output = eval(*then, vars_prime, delta);
-
-            output
-        }
+        } => interpret_let(name, rhs, then, vars, delta),
         TExpr::MutLet {
             name,
             rhs,
             then,
             t: _,
-        } => {
-            if vars.into_iter().any(|scope| scope.contains_key(&name)) {
-                Err(format!("Attempted to bind to already bound name: {}", name))?
-            }
-
-            let (_, val) = eval(*rhs, vars, delta)?;
-            let vars_prime = &mut ctx_new_scope(vars.to_vec());
-            let ell = generate_address();
-            ctx_write(vars_prime, name.to_owned(), ell)?;
-
-            let cvals: Vec<ColoredValue> = if let Value::Tuple(values) = val.clone() {
-                for _ in 2..values.len() {
-                    let _ = generate_address();
-                }
-                iter::once((true, val.clone()))
-                    .chain(values.into_iter().map(|v| (true, v)))
-                    .collect()
-            } else {
-                vec![(true, val.clone())]
-            };
-
-            delta.insert(ell, cvals);
-            let output = eval(*then, vars_prime, delta);
-
-            output
-        }
-        TExpr::Assign(_t, lhs, e2) => {
-            let (_, val) = eval(*e2, vars, delta)?;
-            let ell = eval_lhs(lhs, vars, delta)?;
-
-            let (c_1, _) = mem_lookup(
-                delta,
-                &ell,
-                format!("Attempted to access an address that cannot be found"),
-            )?;
-
-            if !c_1 {
-                Err(format!(
-                    "Attempted to assign to the pointed value of an immutably bound reference"
-                ))?
-            }
-
-            let cvals: Vec<ColoredValue> = if let Value::Tuple(values) = val.clone() {
-                iter::once((true, val.clone()))
-                    .chain(values.into_iter().map(|v| (true, v)))
-                    .collect()
-            } else {
-                vec![(true, val.clone())]
-            };
-
-            delta.insert(ell, cvals);
-
-            println!("ell = {:?}", ell);
-            println!("delta = {:?}", delta);
-
-            Ok((false, Value::Unit))
-        }
+        } => interpret_mutlet(name, rhs, then, vars, delta),
+        TExpr::Assign(_t, lhs, e2) => interpret_assign(lhs, e2, vars, delta),
     }
 }
+
+pub fn interpret_let(
+    name: String,
+    rhs: Box<TExpr>,
+    then: Box<TExpr>,
+    vars: &mut Vec<Context>,
+    delta: &mut Delta,
+) -> Result<ColoredValue, String> {
+    if vars.into_iter().any(|scope| scope.contains_key(&name)) {
+        Err(format!("Attempted to bind to already bound name: {}", name))?
+    }
+
+    let (_, val) = eval(*rhs, vars, delta)?;
+    let vars_prime = &mut ctx_new_scope(vars.to_vec());
+    let ell = generate_address();
+    ctx_write(vars_prime, name.to_owned(), ell)?;
+
+    let cvals: Vec<ColoredValue> = if let Value::Tuple(values) = val.clone() {
+        for _ in 0..values.len() {
+            let _ = generate_address();
+        }
+        iter::once(val.clone())
+            .chain(values)
+            .map(|v| (false, v))
+            .collect()
+    } else {
+        vec![(false, val.clone())]
+    };
+
+    delta.insert(ell, cvals);
+    let output = eval(*then, vars_prime, delta);
+
+    output
+}
+pub fn interpret_mutlet(
+    name: String,
+    rhs: Box<TExpr>,
+    then: Box<TExpr>,
+    vars: &mut Vec<Context>,
+    delta: &mut Delta,
+) -> Result<ColoredValue, String> {
+    if vars.into_iter().any(|scope| scope.contains_key(&name)) {
+        Err(format!("Attempted to bind to already bound name: {}", name))?
+    }
+
+    let (_, val) = eval(*rhs, vars, delta)?;
+    let vars_prime = &mut ctx_new_scope(vars.to_vec());
+    let ell = generate_address();
+    ctx_write(vars_prime, name.to_owned(), ell)?;
+
+    let cvals: Vec<ColoredValue> = if let Value::Tuple(values) = val.clone() {
+        for _ in 0..values.len() {
+            let _ = generate_address();
+        }
+        iter::once((true, val.clone()))
+            .chain(values.into_iter().map(|v| (true, v)))
+            .collect()
+    } else {
+        vec![(true, val.clone())]
+    };
+
+    delta.insert(ell, cvals);
+    let output = eval(*then, vars_prime, delta);
+
+    output
+}
+
+pub fn interpret_assign(
+    lhs: TLhs,
+    e2: Box<TExpr>,
+    vars: &mut Vec<Context>,
+    delta: &mut Delta,
+) -> Result<ColoredValue, String> {
+    let (_, val) = eval(*e2, vars, delta)?;
+    let ell = eval_lhs(lhs, vars, delta)?;
+
+    let (c_1, _) = mem_lookup(
+        delta,
+        &ell,
+        format!("Attempted to access an address that cannot be found"),
+    )?;
+
+    if !c_1 {
+        Err(format!(
+            "Attempted to assign to the pointed value of an immutably bound reference"
+        ))?
+    }
+
+    let cvals: Vec<ColoredValue> = if let Value::Tuple(values) = val.clone() {
+        iter::once((true, val.clone()))
+            .chain(values.into_iter().map(|v| (true, v)))
+            .collect()
+    } else {
+        vec![(true, val.clone())]
+    };
+
+    delta.insert(ell, cvals);
+    Ok((false, Value::Unit))
+}
+
+// have an Interpreter struct. impl Interpreter has all the eval_texpr_type methods.
+// for the debugger, have a boolean flag field in Interpreter that controls whether "breakpoints" in major texpr_type_eval_steps actually suspend
+
+// consider storing lexical information (starting/ending line_number/column_number )

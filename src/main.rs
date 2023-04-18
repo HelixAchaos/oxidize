@@ -33,14 +33,10 @@ fn main() -> Result<(), String> {
         Err("".to_string())?
     };
 
-    println!("asAsfSDFdf");
     let len = src.chars().count();
-    println!("BBBasdf");
 
     let (ast, parse_errs) =
         parser::expr_parser().parse_recovery(Stream::from_iter(len..len + 1, tokens.into_iter()));
-
-    println!("CCasdf");
 
     let ast = if parse_errs.is_empty() {
         if let Some(ast) = ast {

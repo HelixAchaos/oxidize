@@ -1,5 +1,5 @@
 use std::collections::{HashMap, HashSet};
-use std::iter::once;
+use std::iter::{self, once};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use crate::ast::{EExpr, ELhs, STExpr, TLhs, S};
@@ -101,7 +101,7 @@ pub fn type_lhs(lhs: ELhs, ctx: &Gamma, eta: &mut Eta, mu: &mut Mu) -> Result<TL
                     if let Type::Tuple(types) = *boxed_t {
                         if let Some(ti) = types.get(i as usize) {
                             Ok(TLhs::Index(
-                                Type::Ref(b, Box::new(ti.to_owned()), ell + i),
+                                Type::Ref(b, Box::new(ti.to_owned()), ell + i + 1),
                                 Box::new(typed_l),
                                 i,
                             ))
@@ -291,7 +291,14 @@ pub fn type_expr(
                     {
                         Err(format!("cannot move out of `lhs` because it is borrowed / behind a shared reference"))?
                     } else {
-                        let s = eta.get(ell).unwrap();
+                        let s = if let Type::Tuple(types) = *tau.clone() {
+                            (1..=types.len())
+                                .map(|offset| eta.get(ell + offset as u64).unwrap())
+                                .flatten()
+                                .collect()
+                        } else {
+                            eta.get(ell).unwrap()
+                        };
                         Ok(STExpr::Lvalue((*tau, s.to_owned()), lhs))
                     }
                 }
@@ -359,15 +366,13 @@ pub fn type_expr(
 
             let ell = generate_address();
             let ss = if let STExpr::Tuple(_, stexprs) = te1.clone() {
-                for _ in 2..stexprs.len() {
+                for _ in 0..stexprs.len() {
                     let _ = generate_address();
                 }
-                // iter::once(s1)
-                //     .chain(stexprs.iter().map(STExpr::extract_s))
-                //     .collect()
-
-                stexprs.iter().map(STExpr::extract_s)
+                iter::once(s1)
+                    .chain(stexprs.iter().map(STExpr::extract_s))
                     .collect()
+                // stexprs.iter().map(STExpr::extract_s).collect()
             } else {
                 vec![s1]
             };
@@ -392,15 +397,14 @@ pub fn type_expr(
 
             let ell = generate_address();
             let ss = if let STExpr::Tuple(_, stexprs) = te1.clone() {
-                for _ in 2..stexprs.len() {
+                for _ in 0..stexprs.len() {
                     let _ = generate_address();
                 }
-                // iter::once(s1)
-                //     .chain(stexprs.iter().map(STExpr::extract_s))
-                //     .collect()
-
-                stexprs.iter().map(STExpr::extract_s)
+                iter::once(s1)
+                    .chain(stexprs.iter().map(STExpr::extract_s))
                     .collect()
+
+                // stexprs.iter().map(STExpr::extract_s).collect()
             } else {
                 vec![s1]
             };
@@ -429,12 +433,11 @@ pub fn type_expr(
 
             if tau_lhs == te2.extract_type() {
                 let ss = if let STExpr::Tuple(_, stexprs) = te2.clone() {
-                    // iter::once(s1)
-                    //     .chain(stexprs.iter().map(STExpr::extract_s))
-                    //     .collect()
-
-                    stexprs.iter().map(STExpr::extract_s)
+                    iter::once(s)
+                        .chain(stexprs.iter().map(STExpr::extract_s))
                         .collect()
+
+                    // stexprs.iter().map(STExpr::extract_s).collect()
                 } else {
                     vec![s]
                 };
