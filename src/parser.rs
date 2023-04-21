@@ -52,11 +52,13 @@ pub fn expr_parser() -> impl Parser<Token, EExpr, Error = Simple<Token>> {
         ));
 
         let immut_ref = just::<Token, Token, Simple<Token>>(Token::Op("&".to_string()))
-            .ignore_then(select! { Token::Var(s) => EExpr::Ref(s) });
+            .ignore_then(lhs.clone())
+            .map(EExpr::Ref as fn(_) -> _);
 
-        let mut_ref = just(Token::Op("&".to_string())).ignore_then(
-            just(Token::Mut).ignore_then(select! { Token::Var(s) => EExpr::MutRef(s) }),
-        );
+        let mut_ref = just(Token::Op("&".to_string()))
+            .ignore_then(just(Token::Mut))
+            .ignore_then(lhs.clone())
+            .map(EExpr::MutRef as fn(_) -> _);
 
         let refs = mut_ref.or(immut_ref);
 

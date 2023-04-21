@@ -79,19 +79,19 @@ pub fn type_lhs(lhs: ELhs, ctx: &Gamma, eta: &mut Eta, mu: &mut Mu) -> Result<TL
             ))
         }
         ELhs::DeRef(rec_lhs) => {
-            match type_expr(
-                EExpr::Lvalue(*rec_lhs.clone()),
-                &mut ctx.clone(),
-                &mut eta.clone(),
-                &mut mu.clone(),
-            )?
-            .extract_type()
+            let tlhs = type_lhs(*rec_lhs, ctx, eta, mu)?;
+            match tlhs.extract_type()
             {
-                Type::Ref(m, tau, name) => Ok(TLhs::DeRef(
-                    Type::Ref(m, tau, name),
-                    Box::new(type_lhs(*rec_lhs, ctx, eta, mu)?),
-                )),
-                _ => Err(format!("You can't dereference a non-reference value")),
+                Type::Ref(_, t, _) => {
+                    match *t {
+                        Type::Ref(m, tau, ell) => Ok(TLhs::DeRef(
+                            Type::Ref(m, tau, ell),
+                            Box::new(tlhs),
+                        )),
+                        _ => Err(format!("You can't dereference a non-reference value")),
+                    }
+                }
+                _ => panic!()
             }
         }
         ELhs::Index(l, i) => {
@@ -274,13 +274,15 @@ pub fn type_expr(
             Ok(STExpr::Tuple((t, s), stexprs))
         }
         EExpr::Lvalue(lhs) => {
+            todo!("have a new map that tracks ownership");
             let lhs = type_lhs(lhs, ctx, eta, mu)?;
             match lhs {
                 TLhs::Var(_, ref name) => {
                     ctx.remove(name);
                     mu.remove(name);
                 }
-                _ => (),
+                TLhs::DeRef(_, _) => todo!(),
+                TLhs::Index(_, _, _) => todo!()
             };
             match lhs.extract_type() {
                 Type::Ref(_, tau, ell) => {
@@ -315,48 +317,56 @@ pub fn type_expr(
                 Box::new(te2),
             ))
         }
-        EExpr::Ref(name) => {
-            let (_, tau) = ctx.get(&name)?;
-            let ell = mu.get(&name).unwrap().to_owned();
-            if eta.loans.values().any(|s| s.contains(&(true, ell))) {
-                Err(format!(
-                    "cannot borrow `{}` as immutable because it is also borrowed as mutable",
-                    name
-                ))?
+        EExpr::Ref(lhs) => {
+            let tlhs = type_lhs(lhs, ctx, eta, mu)?;
+            match tlhs.extract_type() {
+                Type::Ref(_, boxed_tau, ell) => {
+                    if eta.loans.values().any(|s| s.contains(&(true, ell))) {
+                        Err(format!(
+                            "cannot borrow `{}` as immutable because it is also borrowed as mutable",
+                            tlhs.extract_lhs().to_string()
+                        ))?
+                    }
+
+                    let t = Type::Ref(false, boxed_tau, ell);
+                    let s = HashSet::from_iter(once((false, ell)));
+
+                    Ok(STExpr::Ref((t, s), tlhs))
+                }
+                _ => panic!()
             }
-
-            let t = Type::Ref(false, Box::new(tau), ell);
-            let s = HashSet::from_iter(once((false, ell)));
-
-            Ok(STExpr::Ref((t, s), name.to_string()))
         }
-        EExpr::MutRef(name) => {
-            let (m, tau) = ctx.get(&name)?;
-            if !m {
-                Err(format!(
-                    "cannot borrow `{}` as mutable, as it is not declared as mutable",
-                    name
-                ))?
+        EExpr::MutRef(lhs) => {
+            let tlhs = type_lhs(lhs, ctx, eta, mu)?;
+            match tlhs.extract_type() {
+                Type::Ref(m, boxed_tau, ell) => {
+                    if !m {
+                        Err(format!(
+                            "cannot borrow `{}` as mutable, as it is not declared as mutable",
+                            tlhs.extract_lhs().to_string()
+                        ))?
+                    }
+
+                    if eta.loans.values().any(|s| s.contains(&(false, ell))) {
+                        Err(format!(
+                            "cannot borrow `{}` as mutable because it is also borrowed as immutable",
+                            tlhs.extract_lhs().to_string()
+                        ))?
+                    };
+                    if eta.loans.values().any(|s| s.contains(&(true, ell))) {
+                        Err(format!(
+                            "cannot borrow `{}` as mutable more than once at a time",
+                            tlhs.extract_lhs().to_string()
+                        ))?
+                    };
+
+                    let t = Type::Ref(true, boxed_tau, ell);
+                    let s = HashSet::from_iter(once((true, ell)));
+
+                    Ok(STExpr::MutRef((t, s), tlhs))
+                }
+                _ => panic!()
             }
-
-            let ell = mu.get(&name).unwrap().to_owned();
-            if eta.loans.values().any(|s| s.contains(&(false, ell))) {
-                Err(format!(
-                    "cannot borrow `{}` as mutable because it is also borrowed as immutable",
-                    name
-                ))?
-            };
-            if eta.loans.values().any(|s| s.contains(&(true, ell))) {
-                Err(format!(
-                    "cannot borrow `{}` as mutable more than once at a time",
-                    name
-                ))?
-            };
-
-            let t = Type::Ref(true, Box::new(tau), ell);
-            let s = HashSet::from_iter(once((true, ell)));
-
-            Ok(STExpr::MutRef((t, s), name.to_string()))
         }
         EExpr::Let { name, rhs, then } => {
             let te1 = type_expr(*rhs, ctx, eta, mu)?;

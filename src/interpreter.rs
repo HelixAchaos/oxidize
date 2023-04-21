@@ -105,7 +105,7 @@ pub fn eval_lhs(lhs: TLhs, vars: &mut Vec<Context>, delta: &mut Delta) -> Result
         }
         TLhs::Index(_t, l, i) => {
             let ell = eval_lhs(*l, vars, delta)?;
-            Ok(ell + i)
+            Ok(ell + i + 1)
         }
     }
 }
@@ -180,21 +180,13 @@ pub fn eval(
             eval(*e1, vars, delta)?;
             Ok(eval(*e2, vars, delta)?)
         }
-        TExpr::Ref(_t, name) => {
-            let ell = ctx_lookup(
-                vars,
-                &name,
-                format!("Attempted to reference a variable that is not bound"),
-            )?;
-            Ok((false, Value::Ref(ell.to_owned())))
+        TExpr::Ref(_t, lhs) => {
+            let ell = eval_lhs(lhs, vars, delta)?;
+            Ok((false, Value::Ref(ell)))
         }
-        TExpr::MutRef(_t, name) => {
-            let ell = ctx_lookup(
-                vars,
-                &name,
-                format!("Attempted to reference a variable that is not bound"),
-            )?;
-            Ok((true, Value::Ref(ell.to_owned())))
+        TExpr::MutRef(_t, lhs) => {
+            let ell = eval_lhs(lhs, vars, delta)?;
+            Ok((true, Value::Ref(ell)))
         }
         TExpr::Let {
             name,
