@@ -1,6 +1,4 @@
-use std::collections::HashSet;
-
-use crate::types::{Address, Type};
+use crate::types::{Type, S};
 
 #[derive(Debug, Clone)]
 pub enum ELhs {
@@ -94,15 +92,6 @@ impl EExpr {
         }
     }
 }
-
-// pub enum S {
-//     MutRef(Address),
-//     ImmutRef(HashSet<Address>),
-//     Moved,
-//     None,
-// }
-
-pub type S = HashSet<(bool, Address)>;
 
 type SType = (Type, S);
 
