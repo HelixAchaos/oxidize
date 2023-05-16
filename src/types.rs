@@ -13,37 +13,37 @@ pub enum Type {
 }
 
 // impl Type {
-    // pub fn unify(t1: Self, t2: Self) -> Result<Self, String> {
-    //     match (t1.clone(), t2) {
-    //         (Type::Bool, Type::Bool) | (Type::Int, Type::Int) | (Type::Unit, Type::Unit) => Ok(t1),
-    //         (Type::Tuple(types1), Type::Tuple(types2)) => {
-    //             if types1 == types2 {
-    //                 Ok(t1)
-    //             } else {
-    //                 Err(format!("The types of the tuples' elements don't match."))
-    //             }
-    //         }
-    //         (Type::Ref(true, t1), Type::Ref(true, t2)) => {
-    //             if t1 == t2 {
-    //                 Ok(*t1)
-    //             } else {
-    //                 Err(format!("The types of the tuples' elements don't match."))
-    //             }
-    //         }
-    //         (Type::Ref(false, t1), Type::Ref(false, t2)) => {
-    //             if t1 == t2 {
-    //                 Ok(*t1)
-    //             } else {
-    //                 Err(format!("The types of the tuples' elements don't match."))
-    //             }
-    //         }
-    //         (Type::Ref(false, _), Type::Ref(true, _))
-    //         | (Type::Ref(true, _), Type::Ref(false, _)) => Err(format!(
-    //             "Mixing mutable references and immutable references is not okay."
-    //         )),
-    //         _ => Err(format!("The types trivially don't match.")),
-    //     }
-    // }
+// pub fn unify(t1: Self, t2: Self) -> Result<Self, String> {
+//     match (t1.clone(), t2) {
+//         (Type::Bool, Type::Bool) | (Type::Int, Type::Int) | (Type::Unit, Type::Unit) => Ok(t1),
+//         (Type::Tuple(types1), Type::Tuple(types2)) => {
+//             if types1 == types2 {
+//                 Ok(t1)
+//             } else {
+//                 Err(format!("The types of the tuples' elements don't match."))
+//             }
+//         }
+//         (Type::Ref(true, t1), Type::Ref(true, t2)) => {
+//             if t1 == t2 {
+//                 Ok(*t1)
+//             } else {
+//                 Err(format!("The types of the tuples' elements don't match."))
+//             }
+//         }
+//         (Type::Ref(false, t1), Type::Ref(false, t2)) => {
+//             if t1 == t2 {
+//                 Ok(*t1)
+//             } else {
+//                 Err(format!("The types of the tuples' elements don't match."))
+//             }
+//         }
+//         (Type::Ref(false, _), Type::Ref(true, _))
+//         | (Type::Ref(true, _), Type::Ref(false, _)) => Err(format!(
+//             "Mixing mutable references and immutable references is not okay."
+//         )),
+//         _ => Err(format!("The types trivially don't match.")),
+//     }
+// }
 // }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -110,7 +110,10 @@ impl S {
             S::ImmutRef(_) | S::MutRef(_) => Err(format!("You can't move something referred to.")),
             S::None => Ok(()),
             S::Union(ss) => {
-                let _ = ss.into_iter().map(S::may_move).collect::<Result<Vec<_>, String>>()?;
+                let _ = ss
+                    .into_iter()
+                    .map(S::may_move)
+                    .collect::<Result<Vec<_>, String>>()?;
                 Ok(())
             }
         }
