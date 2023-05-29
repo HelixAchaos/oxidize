@@ -35,7 +35,7 @@ impl Mu {
     }
     fn diagnostics(&self, gamma: &Gamma) -> String {
         // let loans: BTreeMap<_, _> = self.location_map.iter().map(|(k, v)| (v, k)).collect();
-        let mut loans: Vec<(&Address, &Var)> = self
+        let mut addrs: Vec<(&Address, &Var)> = self
             .location_map
             .iter()
             .map(|(var, ell)| (ell, var))
@@ -56,8 +56,8 @@ impl Mu {
 
                 */
 
-        loans.sort();
-        loans
+        addrs.sort();
+        addrs
             .into_iter()
             .map(|(ell, var)| match gamma.get(var) {
                 Ok((_, tau)) => match tau {
@@ -109,14 +109,9 @@ impl Eta {
                     self.loans.insert(ell + (offset as u64), s);
                 }
                 S::Moved(Some(l)) => {
-                    // // is_mov is called elsewhere
-                    // if let Some(old_s) = self.loans.get(&ell) {
-                    //     s.validate(old_s, l)?;
-                    // }
                     self.loans.insert(l + (offset as u64), S::Moved(Some(ell)));
                 }
                 S::Moved(None) => {
-                    // is_mov is called elsewhere
                     self.loans.insert(ell, S::Moved(None));
                 }
                 S::MutRef(target) => {
@@ -298,8 +293,8 @@ impl Eta {
                 if let Ok((_, ref tau)) = gamma.get(name) {
                     if let Some(msg) = loan.stringify(self, ell, Some(tau)) {
                         value_info.push(format!(
-                            "{}{ell} is {}\n",
-                            "\t".repeat(
+                            "\t{}{ell} is {}",
+                            " ".repeat(
                                 remaining_indents.last().or(Some(&(0 as usize))).unwrap() + 1
                             ),
                             msg
@@ -321,8 +316,8 @@ impl Eta {
             } else {
                 if let Some(msg) = loan.stringify(self, ell, None) {
                     value_info.push(format!(
-                        "{}{ell} is {}",
-                        "\t".repeat(remaining_indents.last().or(Some(&(0 as usize))).unwrap() + 1),
+                        "\t{}{ell} is {}",
+                        " ".repeat(remaining_indents.last().or(Some(&(0 as usize))).unwrap() + 1),
                         msg
                     ));
                 }
@@ -746,6 +741,11 @@ pub fn type_expr(
             }?;
             eta.replace(new_eta);
 
+            cls();
+            diagnostics(ctx, eta, mu);
+            file.reveal(span_3.end);
+            pause();
+
             let s = match S::join(s_1, s_2) {
                 Ok(s) => Ok(s),
                 Err(msg) => Err(TypeError { msg, span }),
@@ -774,11 +774,6 @@ pub fn type_expr(
                     .map(|(stexpr, _)| stexpr.extract_type())
                     .collect(),
             );
-
-            // let s = stexprs
-            //     .iter()
-            //     .map(|(stexpr, _)| stexpr.extract_s())
-            //     .fold(Ok(S::None), |acc, x| S::join(acc?, x))?;
             Ok(STExpr::Tuple((t, S::None), stexprs))
         }
         EExpr::Lvalue((lhs, lhs_span)) => {
@@ -829,6 +824,7 @@ pub fn type_expr(
                             .collect(),
                         _ => vec![ell],
                     };
+
                     for (i, ell) in ells.iter().enumerate() {
                         let par = if i == 0 { "" } else { "partially " };
                         match eta.get(&ell) {
@@ -867,7 +863,6 @@ pub fn type_expr(
 
                     let t = Type::Ref(false, boxed_tau);
                     let s = S::ImmutRef(HashSet::from_iter(once(ell)));
-
                     Ok(STExpr::Ref((t, s), (tlhs, lhs_span)))
                 }
                 _ => panic!(),
@@ -886,22 +881,6 @@ pub fn type_expr(
                             span.clone(),
                         ))?
                     }
-
-                    if eta.loans.values().any(|s| s.contains(&(false, ell))) {
-                        Err(TypeError::wrap(format!(
-                            "cannot borrow `{}` as mutable because it is also borrowed as immutable",
-                            tlhs.extract_lhs().to_string()
-                        ), span.clone()))?
-                    };
-                    if eta.loans.values().any(|s| s.contains(&(true, ell))) {
-                        Err(TypeError::wrap(
-                            format!(
-                                "cannot borrow `{}` as mutable more than once at a time",
-                                tlhs.extract_lhs().to_string()
-                            ),
-                            span.clone(),
-                        ))?
-                    };
 
                     let ells = match *boxed_tau.clone() {
                         Type::Tuple(taus) => iter::once(ell)
@@ -957,7 +936,6 @@ pub fn type_expr(
 
                     let t = Type::Ref(true, boxed_tau);
                     let s = S::MutRef(ell);
-
                     Ok(STExpr::MutRef((t, s), (tlhs, lhs_span)))
                 }
                 _ => panic!(),
@@ -989,8 +967,6 @@ pub fn type_expr(
             };
 
             eta.insert(ell, ss)?;
-            mu.insert(name.clone(), ell);
-
             mu.insert(name.clone(), ell);
 
             if display {

@@ -51,16 +51,18 @@ impl TypeError {
     pub fn prettify(&self, src: String) -> String {
         format!(
             "At {:?}, TypeCheckError was raised: {}\n\nCode snippet:\n```\n{}\n```",
-            self.span, self.msg, &src[self.span.clone()]
+            self.span,
+            self.msg,
+            &src[self.span.clone()]
         )
     }
     pub fn wrap(msg: String, span: Span) -> TypeError {
-        TypeError { msg, span}
+        TypeError { msg, span }
     }
     pub fn result_wrap<T>(result: Result<T, String>, span: Span) -> Result<T, TypeError> {
         match result {
             Ok(t) => Ok(t),
-            Err(msg) => Err(TypeError::wrap(msg, span))
+            Err(msg) => Err(TypeError::wrap(msg, span)),
         }
     }
 }
@@ -194,51 +196,51 @@ impl S {
                         .map(|l| eta.get(&(ell + (l as u64))).unwrap())
                         .collect::<Vec<S>>();
 
-                    let mut string = String::new();
+                    let errs = &mut vec![];
                     if ss.iter().all(|s| s.is_move() == 1) {
-                        string.push_str("completely-but-perhaps-discontiguously moved")
+                        errs.push("completely-but-perhaps-discontiguously moved")
                     } else if ss.iter().any(|s| s.is_move() == 1) {
-                        string.push_str("partially moved")
+                        errs.push("partially moved")
                     } else if ss.iter().all(|s| s.is_move() == 0) {
-                        string.push_str("maybe completely-but-perhaps-discontiguously moved")
+                        errs.push("maybe completely-but-perhaps-discontiguously moved")
                     } else if ss.iter().any(|s| s.is_move() == 0) {
-                        string.push_str("maybe partially moved")
+                        errs.push("maybe partially moved")
                     }
 
                     if ss.iter().all(|s| s.is_drop() == 1) {
-                        string.push_str("completely-but-perhaps-discontiguously dropped")
+                        errs.push("completely-but-perhaps-discontiguously dropped")
                     } else if ss.iter().any(|s| s.is_drop() == 1) {
-                        string.push_str("partially dropped")
+                        errs.push("partially dropped")
                     } else if ss.iter().all(|s| s.is_drop() == 0) {
-                        string.push_str("maybe completely-but-perhaps-discontiguously dropped")
+                        errs.push("maybe completely-but-perhaps-discontiguously dropped")
                     } else if ss.iter().any(|s| s.is_drop() == 0) {
-                        string.push_str("maybe partially dropped")
+                        errs.push("maybe partially dropped")
                     }
 
                     if ss.iter().all(|s| s.is_immut_ref() == 1) {
-                        string.push_str("completely immutably_referenced")
+                        errs.push("completely immutably_referenced")
                     } else if ss.iter().any(|s| s.is_immut_ref() == 1) {
-                        string.push_str("partially immutably_referenced")
+                        errs.push("partially immutably_referenced")
                     } else if ss.iter().all(|s| s.is_immut_ref() == 0) {
-                        string.push_str("maybe completely immutably_referenced")
+                        errs.push("maybe completely immutably_referenced")
                     } else if ss.iter().any(|s| s.is_immut_ref() == 0) {
-                        string.push_str("maybe partially immutably_referenced")
+                        errs.push("maybe partially immutably_referenced")
                     }
 
                     if ss.iter().all(|s| s.is_mut_ref() == 1) {
-                        string.push_str("completely mutably_referenced")
+                        errs.push("completely mutably_referenced")
                     } else if ss.iter().any(|s| s.is_mut_ref() == 1) {
-                        string.push_str("partially mutably_referenced")
+                        errs.push("partially mutably_referenced")
                     } else if ss.iter().all(|s| s.is_mut_ref() == 0) {
-                        string.push_str("maybe completely mutably_referenced")
+                        errs.push("maybe completely mutably_referenced")
                     } else if ss.iter().any(|s| s.is_mut_ref() == 0) {
-                        string.push_str("maybe partially mutably_referenced")
+                        errs.push("maybe partially mutably_referenced")
                     }
 
-                    if string == "" {
+                    if errs.len() == 0 {
                         None
                     } else {
-                        Some(string)
+                        Some(errs.join(" & "))
                     }
                 }
                 _ => None,
@@ -261,14 +263,6 @@ impl S {
                     .collect::<Vec<String>>()
                     .join(" | "),
             ),
-        }
-    }
-    pub fn contains(&self, t: &(bool, Address)) -> bool {
-        match self {
-            S::Union(ss) => ss.into_iter().any(|s| s.contains(t)),
-            S::MutRef(s) => t.0 && (s == &t.1),
-            S::ImmutRef(ss) => (!t.0) && (ss.contains(&t.1)),
-            _ => false,
         }
     }
     pub fn join(s1: Self, s2: Self) -> Result<Self, String> {
