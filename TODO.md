@@ -1,0 +1,8 @@
+- [x] Re-implement the parser to support spans.
+  - [x] Implement the lexer (possibly reusing an existing lexer).
+  - [x] Implement the parser.
+    - [x] Make sure folded/nested expressions like `2 + 2 - 4` work.
+- [x] Show the relationships between layout locations (e.g., tuple and parts thereof).
+- [x] Keep track of where values were moved to.
+- [ ] Allow the user to select branches of conditional-expressions to step through.
+- [x] Show correct information on PartialMoves.

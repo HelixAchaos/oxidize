@@ -1,9 +1,8 @@
-use std::collections::{HashMap, HashSet};
+use std::cmp::max;
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::fs;
 use std::iter::{self, once};
 use std::sync::atomic::{AtomicUsize, Ordering};
-
-use chumsky::combinator::MapWithSpan;
 
 use crate::ast::{EExpr, ELhs, STExpr, Span, Spanned, TLhs};
 use crate::lexer;
@@ -12,22 +11,138 @@ use crate::types::{Address, Type, Var, S};
 type ColoredType = (bool, Type);
 type TypeContext = HashMap<Var, ColoredType>;
 
-pub type Mu = HashMap<Var, Address>;
+#[derive(Debug, Clone)]
+pub struct Mu {
+    location_map: HashMap<Var, Address>,
+}
+
+impl Mu {
+    pub fn new() -> Mu {
+        Mu {
+            location_map: HashMap::new(),
+        }
+    }
+    pub fn iter(&self) -> std::collections::hash_map::Iter<'_, String, u64> {
+        self.location_map.iter()
+    }
+    fn get(&self, k: &Var) -> Option<&Address> {
+        self.location_map.get(k)
+    }
+    fn insert(&mut self, k: Var, v: Address) -> Option<Address> {
+        self.location_map.insert(k, v)
+    }
+    fn remove(&mut self, k: &Var) -> Option<Address> {
+        self.location_map.remove(k)
+    }
+    fn diagnostics(&self, gamma: &Gamma) -> String {
+        // let loans: BTreeMap<_, _> = self.location_map.iter().map(|(k, v)| (v, k)).collect();
+        let mut loans: Vec<(&Address, &Var)> = self
+            .location_map
+            .iter()
+            .map(|(var, ell)| (ell, var))
+            .collect::<Vec<_>>();
+
+        /*
+
+        Memory Map (Mu):
+            a -> 0
+                 a.0 -> 1
+                 a.1 -> 2
+                 a.2 -> 3
+            b -> 3
+                 b.0 -> 4
+                 b.1 -> 5
+                 b.2 -> 6
+            z -> 6
+
+                */
+
+        loans.sort();
+        loans
+            .into_iter()
+            .map(|(ell, var)| match gamma.get(var) {
+                Ok((_, tau)) => match tau {
+                    Type::Tuple(taus) => {
+                        format!(
+                            "\t{var} -> {ell}\n{}",
+                            taus.iter()
+                                .enumerate()
+                                .map(|(i, _)| format!(
+                                    "\t{}{var}.{i} -> {}",
+                                    " ".repeat(var.len() + 1),
+                                    ell + (i as u64) + 1
+                                ))
+                                .collect::<Vec<String>>()
+                                .join("\n")
+                        )
+                    }
+                    _ => format!("\t{var} -> {ell}"),
+                },
+                Err(_) => panic!(),
+            })
+            .collect::<Vec<String>>()
+            .join("\n")
+
+        // format!("{:?}", self.location_map)
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct Eta {
-    pub loans: HashMap<Address, S>,
+    pub loans: BTreeMap<Address, S>,
 }
 
 impl Eta {
-    fn get(&self, ell: Address) -> Option<S> {
+    pub fn new() -> Eta {
+        Eta {
+            loans: BTreeMap::new(),
+        }
+    }
+
+    pub fn get(&self, ell: Address) -> Option<S> {
         self.loans.get(&ell).cloned()
     }
 
-    fn insert(&mut self, ell: Address, ss: Vec<S>) {
+    fn insert(&mut self, ell: Address, ss: Vec<S>) -> Result<(), String> {
         for (offset, s) in ss.into_iter().enumerate() {
-            self.loans.insert(ell + (offset as u64), s);
+            match s {
+                S::None => {
+                    self.loans.insert(ell + (offset as u64), s);
+                }
+                S::Moved(Some(l)) => {
+                    // // is_mov is called elsewhere
+                    // if let Some(old_s) = self.loans.get(&ell) {
+                    //     s.validate(old_s, l)?;
+                    // }
+                    self.loans.insert(l + (offset as u64), S::Moved(Some(ell)));
+                }
+                S::Moved(None) => {
+                    // is_mov is called elsewhere
+                    self.loans.insert(ell, S::Moved(None));
+                }
+                S::MutRef(target) => {
+                    if let Some(old_s) = self.loans.get(&(target + (offset as u64))) {
+                        s.validate(old_s, target)?;
+                    } else {
+                        self.loans.insert(target + (offset as u64), S::MutRef(ell));
+                    }
+                }
+                S::ImmutRef(ref targets) => {
+                    for target in targets {
+                        if let Some(old_s) = self.loans.get(&(target + (offset as u64))) {
+                            s.validate(old_s, target.to_owned())?;
+                        }
+                        self.loans.insert(target + (offset as u64), S::MutRef(ell));
+                    }
+                }
+                S::Union(onions) => {
+                    for onion in onions {
+                        self.insert(ell, vec![onion])?;
+                    }
+                }
+            };
         }
+        Ok(())
     }
 
     fn replace(&mut self, eta: Eta) {
@@ -50,7 +165,10 @@ impl Eta {
         if let Some(s) = self.get(ell) {
             match s {
                 S::Union(ss) => {
-                    if ss.iter().all(|s| s == &S::Moved || s == &S::None) {
+                    if ss.iter().all(|s| match s {
+                        S::Moved(_) | S::None => true,
+                        _ => false,
+                    }) {
                         self.wipe(ell);
                     } else {
                         Err(format!(
@@ -64,7 +182,7 @@ impl Eta {
                 S::ImmutRef(_) => Err(format!(
                     "You can't drop a value that has an immutable reference pointing to it."
                 ))?,
-                S::Moved => Err(format!(
+                S::Moved(_) => Err(format!(
                     "You can't drop a moved value. It's already dropped."
                 ))?,
                 S::None => {
@@ -85,15 +203,41 @@ impl Eta {
         Ok(())
     }
 
-    fn mov(&mut self, ell: Address, t: Type) {
+    fn mov(&mut self, ell: Address, new_home: Option<Vec<Address>>, t: Type) {
         match t {
             Type::Tuple(ts) => {
-                for (i, t) in ts.into_iter().enumerate() {
-                    self.mov(ell + (i as u64) + 1, t);
+                if let Some(new_home) = new_home {
+                    self.mov(
+                        ell,
+                        Some(vec![new_home.get(0).unwrap().clone()]),
+                        Type::Unit, // to treat it as one-element
+                    );
+                    for (i, t) in ts.into_iter().enumerate() {
+                        self.mov(
+                            ell + (i as u64) + 1,
+                            Some(new_home.iter().map(|l| l + (i as u64) + 1).collect()),
+                            t,
+                        );
+                    }
+                } else {
+                    self.mov(
+                        ell,
+                        None,
+                        Type::Unit, // to treat it as one-element
+                    );
+                    for (i, t) in ts.into_iter().enumerate() {
+                        self.mov(ell + (i as u64) + 1, None, t);
+                    }
                 }
             }
             _ => {
-                self.loans.insert(ell, S::Moved);
+                if let Some(new_home) = new_home {
+                    for l in new_home {
+                        self.loans.insert(ell, S::Moved(Some(l)));
+                    }
+                } else {
+                    self.loans.insert(ell, S::Moved(None));
+                }
             }
         }
     }
@@ -114,7 +258,10 @@ impl Eta {
                     .collect::<Result<Vec<_>, String>>()
                 {
                     Ok(_) => Ok(()),
-                    Err(e) => Err(format!("Partial: {}", e)),
+                    Err(e) => {
+                        // todo!("specify where borrowed/moved");
+                        Err(format!("Partial: {}", e))
+                    }
                 }
             }
             _ => Ok(()),
@@ -143,48 +290,105 @@ impl Eta {
                     Err(e) => Err(e),
                 }
             })
-            .collect::<Result<HashMap<Address, S>, String>>()?;
+            .collect::<Result<BTreeMap<Address, S>, String>>()?;
         Ok(Eta { loans })
+    }
+    fn diagnostics(&self, mu: &Mu, gamma: &Gamma) -> String {
+        println!("LOANS = {:?}", self.loans);
+
+        let mut value_info = String::new();
+        let remaining_indents = &mut Vec::new();
+        for (ell, loan) in self.loans.iter() {
+            if let Some(name) = mu
+                .iter()
+                .map(|(k, v)| (v, k))
+                .collect::<HashMap<&u64, &String>>()
+                .get(ell)
+            {
+                if let Ok((_, ref tau)) = gamma.get(name) {
+                    if let Some(msg) = loan.stringify(self, ell, Some(tau)) {
+                        value_info.push_str(&format!("{}{ell} is {}\n", "\t".repeat(remaining_indents.last().or(Some(&(0 as usize))).unwrap() + 1), msg));
+                    }
+                    match tau {
+                        Type::Tuple(taus) => {
+                            remaining_indents.push(taus.len())
+                        }
+                        _ => {
+                            if let Some(indent_level) = remaining_indents.last() {
+                                if indent_level > &1 {
+                                    remaining_indents.push(indent_level - 1)
+                                }
+                            }
+                        }
+                    }
+                } else {
+                    panic!(
+                        "Wat, the provided name (that ell points to) should be in gamma..."
+                    )
+                }
+            }
+            else {
+                if let Some(msg) = loan.stringify(self, ell, None) {
+                    value_info.push_str(&format!("{}{ell} is {}\n", "\t".repeat(remaining_indents.last().or(Some(&(0 as usize))).unwrap() + 1), msg));
+                }
+            }
+        }
+
+        format!(
+            "\tthe values at addresses...\n{}",
+            value_info
+        )
     }
 }
 
 #[derive(Debug, Clone)]
 pub struct Gamma {
-    pub vars: Vec<TypeContext>,
+    pub scopes: Vec<TypeContext>,
 }
 
 impl Gamma {
-    fn get(&self, name: &Var) -> Result<ColoredType, String> {
-        if let Some(ct) = self.vars.iter().rev().find_map(|frame| frame.get(name)) {
+    pub fn new() -> Gamma {
+        Gamma { scopes: Vec::new() }
+    }
+    pub fn get(&self, name: &Var) -> Result<ColoredType, String> {
+        if let Some(ct) = self.scopes.iter().rev().find_map(|frame| frame.get(name)) {
             Ok(ct.to_owned())
         } else {
             Err(format!("Name not found"))
         }
     }
-    // fn remove(&mut self, name: &Var) {
-    //     if let Some(frame) = self
-    //         .vars
-    //         .iter_mut()
-    //         .rev()
-    //         .find(|frame| frame.contains_key(name))
-    //     {
-    //         frame.remove(name);
-    //     } else {
-    //         panic!()
-    //     }
-    // }
     fn assign(&mut self, name: Var, ct: ColoredType) {
-        self.vars.last_mut().unwrap().insert(name, ct);
+        self.scopes.last_mut().unwrap().insert(name, ct);
     }
     fn push_level(&mut self) {
-        self.vars.push(HashMap::new())
+        self.scopes.push(HashMap::new())
     }
-    fn pop_level(&mut self) {
-        self.vars.pop().unwrap();
+    fn pop_level(&mut self, mu: &mut Mu) {
+        let scope = self.scopes.pop().unwrap();
+        for var in scope.keys() {
+            mu.remove(var);
+        }
     }
-    // fn replace(&mut self, gamma: Gamma) {
-    //     self.vars = gamma.vars
-    // }
+    fn diagnostics(&self) -> String {
+        self.scopes
+            .iter()
+            .map(|scope| {
+                scope
+                    .iter()
+                    .map(|(var, (is_mutable, tau))| {
+                        format!(
+                            "\t{}: {} {}",
+                            var,
+                            if *is_mutable { "mutable" } else { "immutable" },
+                            tau
+                        )
+                    })
+                    .collect::<Vec<String>>()
+                    .join("\n")
+            })
+            .collect::<Vec<String>>()
+            .join("\n")
+    }
 }
 
 fn generate_address() -> Address {
@@ -193,33 +397,33 @@ fn generate_address() -> Address {
     result as u64
 }
 
-fn pause() {
+pub fn pause() {
     std::io::stdin().read_line(&mut String::new()).unwrap();
 }
 
 fn diagnostics(gamma: &Gamma, eta: &Eta, mu: &Mu) {
-    println!("Type Context (Gamma): {:?}", gamma);
-    println!("Memory Map (Mu): {:?}", mu);
-    println!("Memory Layout (Eta): {:?}", eta);
+    println!("Type Context (Gamma): \n{}\n", gamma.diagnostics());
+    println!("Memory Map (Mu):\n{}\n", mu.diagnostics(gamma));
+    println!("Borrow Layout (Eta):\n{}", eta.diagnostics(mu, gamma));
+    println!("{}", "-".to_string().repeat(80));
 }
 
 pub struct File {
     contents: Box<String>,
     start: usize,
     end: usize,
-    tokens: Vec<(lexer::Token, Span)>
+    tokens: VecDeque<(lexer::Token, Span)>,
 }
 
 impl File {
-    pub fn new(file_name: String, tokens: Vec<(lexer::Token, Span)>) -> File {
-        let src =
-            &fs::read_to_string(file_name).expect("Should have been able to read the file");
+    pub fn new(file_name: String, tokens: VecDeque<(lexer::Token, Span)>) -> File {
+        let src = &fs::read_to_string(file_name).expect("Should have been able to read the file");
 
         File {
             contents: Box::new(src.to_owned()),
             start: 0,
             end: src.len(),
-            tokens
+            tokens,
         }
     }
     pub fn seek(&mut self, pos: usize) {
@@ -227,10 +431,12 @@ impl File {
     }
     pub fn reveal_until(&mut self, token: &lexer::Token) {
         for (tok, span) in self.tokens.iter() {
-            if span.end < self.end {continue;}
+            if span.end < self.end {
+                continue;
+            }
             self.end = span.end;
             if tok == token {
-                break
+                break;
             }
         }
         self.show();
@@ -370,7 +576,7 @@ pub fn type_expr(
             assert!(s_2 == S::None);
             match (a.extract_type(), b.extract_type()) {
                 (Type::Int, Type::Int) => Ok(STExpr::Add(
-                    (Type::Bool, S::None),
+                    (Type::Int, S::None),
                     Box::new((a, span_1)),
                     Box::new((b, span_2)),
                 )),
@@ -388,7 +594,7 @@ pub fn type_expr(
             assert!(s_2 == S::None);
             match (a.extract_type(), b.extract_type()) {
                 (Type::Int, Type::Int) => Ok(STExpr::Sub(
-                    (Type::Bool, S::None),
+                    (Type::Int, S::None),
                     Box::new((a, span_1)),
                     Box::new((b, span_2)),
                 )),
@@ -406,7 +612,7 @@ pub fn type_expr(
             assert!(s_2 == S::None);
             match (a.extract_type(), b.extract_type()) {
                 (Type::Int, Type::Int) => Ok(STExpr::Mul(
-                    (Type::Bool, S::None),
+                    (Type::Int, S::None),
                     Box::new((a, span_1)),
                     Box::new((b, span_2)),
                 )),
@@ -424,7 +630,7 @@ pub fn type_expr(
             assert!(s_2 == S::None);
             match (a.extract_type(), b.extract_type()) {
                 (Type::Int, Type::Int) => Ok(STExpr::Div(
-                    (Type::Bool, S::None),
+                    (Type::Int, S::None),
                     Box::new((a, span_1)),
                     Box::new((b, span_2)),
                 )),
@@ -444,10 +650,15 @@ pub fn type_expr(
                 ))?
             }
 
+            // todo!("choose branch; at the end of the branch, unify");
+
+            // type_expr flag variable - debug?
+
             let mut then_mu = mu.clone();
             let mut then_eta = eta.clone();
             let then_exp = type_expr(file, *then_exp, ctx, &mut then_eta, &mut then_mu)?;
             let s_1 = then_exp.extract_s();
+
             let mut else_mu = mu.clone();
             let mut else_eta = eta.clone();
             let else_exp = type_expr(file, *else_exp, ctx, &mut else_eta, &mut else_mu)?;
@@ -470,7 +681,6 @@ pub fn type_expr(
             eta.replace(Eta::unify(&then_eta, &else_eta)?);
 
             let s = S::join(s_1, s_2)?;
-
             Ok(STExpr::Cond(
                 (then_tau, s),
                 Box::new((cond, span_1)),
@@ -494,11 +704,11 @@ pub fn type_expr(
                     .collect(),
             );
 
-            let s = stexprs
-                .iter()
-                .map(|(stexpr, _)| stexpr.extract_s())
-                .fold(Ok(S::None), |acc, x| S::join(acc?, x))?;
-            Ok(STExpr::Tuple((t, s), stexprs))
+            // let s = stexprs
+            //     .iter()
+            //     .map(|(stexpr, _)| stexpr.extract_s())
+            //     .fold(Ok(S::None), |acc, x| S::join(acc?, x))?;
+            Ok(STExpr::Tuple((t, S::None), stexprs))
         }
         EExpr::Lvalue(lhs) => {
             let (lhs, ell) = type_lhs(lhs, ctx, eta, mu)?;
@@ -507,8 +717,8 @@ pub fn type_expr(
             match lhs.extract_type() {
                 Type::Ref(_, tau) => {
                     eta.may_move(ell, *tau.clone())?;
-                    eta.mov(ell, *tau.clone());
-                    Ok(STExpr::Lvalue((*tau, S::None), lhs))
+                    eta.mov(ell, None, *tau.clone());
+                    Ok(STExpr::Lvalue((*tau, S::Moved(Some(ell))), lhs))
                 }
                 _ => panic!(),
             }
@@ -516,14 +726,15 @@ pub fn type_expr(
         EExpr::Seq(e1, e2) => {
             let te1 = type_expr(file, *e1.clone(), ctx, eta, mu)?;
 
-            cls();
-            diagnostics(ctx, eta, mu);
-            file.seek(e1.1.end);
-            file.reveal_until(&lexer::Token::Op(";".to_string()));
-            pause();
+            // cls();
+            // diagnostics(ctx, eta, mu);
+            // file.seek(e1.1.end);
+            // file.reveal_until(&lexer::Token::Op(";".to_string()));
+            // pause();
 
             let te2 = type_expr(file, *e2.clone(), ctx, eta, mu)?;
             let s2 = te2.extract_s();
+
             Ok(STExpr::Seq(
                 (te2.extract_type(), s2),
                 Box::new((te1, e1.1)),
@@ -583,7 +794,7 @@ pub fn type_expr(
         }
         EExpr::Let { name, rhs, then } => {
             let te1 = type_expr(file, *rhs.clone(), ctx, eta, mu)?;
-            let s1 = te1.extract_s();
+            let s1: S = te1.extract_s();
 
             ctx.push_level();
             ctx.assign(name.clone(), (false, te1.extract_type()));
@@ -600,7 +811,10 @@ pub fn type_expr(
             } else {
                 vec![s1]
             };
+
             eta.insert(ell, ss);
+            mu.insert(name.clone(), ell);
+
             mu.insert(name.clone(), ell);
 
             cls();
@@ -611,7 +825,7 @@ pub fn type_expr(
 
             let te2 = type_expr(file, *then.clone(), ctx, eta, mu)?;
             let s2 = te2.extract_s();
-            ctx.pop_level();
+            ctx.pop_level(mu);
             let t = te2.extract_type();
             Ok(STExpr::Let {
                 name,
@@ -643,17 +857,15 @@ pub fn type_expr(
             eta.insert(ell, ss);
             mu.insert(name.clone(), ell);
 
-
             cls();
             diagnostics(ctx, eta, mu);
             file.seek(rhs.1.end);
             file.reveal_until(&lexer::Token::In);
             pause();
 
-
             let te2 = type_expr(file, *then.clone(), ctx, eta, mu)?;
             let s2 = te2.extract_s();
-            ctx.pop_level();
+            ctx.pop_level(mu);
             let t = te2.extract_type();
             Ok(STExpr::MutLet {
                 name,
@@ -663,6 +875,11 @@ pub fn type_expr(
             })
         }
         EExpr::Assign(lhs, e2) => {
+            cls();
+            diagnostics(ctx, eta, mu);
+            file.reveal(e2.1.end);
+            pause();
+
             let te2 = type_expr(file, *e2.clone(), ctx, eta, mu)?;
             let s = te2.extract_s();
 
@@ -684,13 +901,6 @@ pub fn type_expr(
                     vec![s]
                 };
                 eta.insert(ell, ss);
-
-
-                cls();
-                diagnostics(ctx, eta, mu);
-                file.reveal(e2.1.end);
-                pause();
-
 
                 Ok(STExpr::Assign(
                     (Type::Unit, S::None),

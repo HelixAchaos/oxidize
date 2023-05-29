@@ -1,3 +1,6 @@
+use std::error::Error;
+use std::fmt;
+
 use chumsky::prelude::*;
 
 use crate::ast::Span;
@@ -14,6 +17,52 @@ pub enum Token {
     If,
     Then,
     Else,
+}
+
+impl Token {
+    pub fn expect(self, tok: Token, span: Span) -> Result<Self, ParseError> {
+        if self == tok {
+            Ok(self)
+        } else {
+            Err(ParseError {
+                msg: format!("Expected {:?} but instead found {:?}", tok, self),
+                span,
+            })
+        }
+    }
+
+    pub fn posh_expect(self, tok: Token, span: Span, message: String) -> Result<Self, ParseError> {
+        if self == tok {
+            Ok(self)
+        } else {
+            Err(ParseError { msg: message, span })
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct ParseError {
+    pub msg: String,
+    pub span: Span,
+}
+
+impl ParseError {
+    pub fn prettify(&self) -> String {
+        format!("At {:?}, ParseError was raised: {}", self.span, self.msg)
+    }
+    pub fn wrap(&self, burrito: Self) -> Self {
+        let innie: String = self
+            .prettify()
+            .split("\n")
+            .into_iter()
+            .map(|s| format!("\t{}", s))
+            .collect();
+        let msg = format!("{}\n{}", burrito.msg, innie);
+        ParseError {
+            msg,
+            span: burrito.span,
+        }
+    }
 }
 
 pub fn lex() -> impl Parser<char, Vec<(Token, Span)>, Error = Simple<char>> + Clone {

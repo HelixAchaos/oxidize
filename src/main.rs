@@ -1,9 +1,6 @@
-use std::collections::HashMap;
-
-// use crate::interpreter::{eval, Context, Delta};
 use crate::typechecker::{Eta, File, Gamma, Mu};
-// use crate::types::Type;
-use chumsky::{Parser, Stream};
+use chumsky::Parser;
+use std::collections::VecDeque;
 
 mod ast;
 mod interpreter;
@@ -34,98 +31,34 @@ fn main() -> Result<(), String> {
         Err("".to_string())?
     };
 
-    // let len = src.chars().count();
+    let mut tokens = VecDeque::from(tokens);
 
-    // let (ast, parse_errs) =
-    //     parser::expr_parser().parse_recovery(Stream::from_iter(len..len + 1, tokens.into_iter()));
+    println!("token_count = {}", tokens.len());
+    typechecker::pause();
 
-    // let ast = if parse_errs.is_empty() {
-    //     if let Some(ast) = ast {
-    //         ast
-    //     } else {
-    //         todo!("I don't know how this would be possible.")
-    //     }
-    // } else {
-    //     Err(parse_errs.into_iter().fold("".to_string(), |acc, e| {
-    //         format!("{}\nParse error: {:?}", acc, e)
-    //     }))?
-    // };
-    // let ast = ast.0;
-
-    let ast = ast::EExpr::Let {
-        name: "a".to_string(),
-        rhs: Box::new((
-            ast::EExpr::Tuple(vec![
-                (ast::EExpr::Num(1), 9..10),
-                (ast::EExpr::Num(2), 12..13),
-            ]),
-            8..14,
-        )),
-        then: Box::new((
-            ast::EExpr::MutLet {
-                name: "b".to_string(),
-                rhs: Box::new((
-                    ast::EExpr::Tuple(vec![
-                        (ast::EExpr::Num(1), 35..36),
-                        (ast::EExpr::Num(4), 38..39),
-                    ]),
-                    34..40,
-                )),
-                then: Box::new((
-                    ast::EExpr::Let {
-                        name: "z".to_string(),
-                        rhs: Box::new((
-                            ast::EExpr::Lvalue(ast::ELhs::Index(
-                                Box::new((ast::ELhs::Var("a".to_string()), 60..63)),
-                                0,
-                            )),
-                            60..63,
-                        )),
-                        then: Box::new((
-                            ast::EExpr::Seq(
-                                Box::new((
-                                    ast::EExpr::Assign(
-                                        ast::ELhs::Var("b".to_string()),
-                                        Box::new((
-                                            ast::EExpr::Lvalue(ast::ELhs::Var("b".to_string())),
-                                            83..84,
-                                        )),
-                                    ),
-                                    79..84,
-                                )),
-                                Box::new((
-                                    ast::EExpr::Lvalue(ast::ELhs::Var("b".to_string())),
-                                    86..87,
-                                )),
-                            ),
-                            79..87,
-                        )),
-                    },
-                    52..87,
-                )),
-            },
-            22..87,
-        )),
+    let spast = match parser::expr_parser(&mut tokens) {
+        Ok(spast) => spast,
+        Err(e) => Err(format!(
+            "{}
+            contents: {}",
+            e.prettify(),
+            src.get(e.span).unwrap_or("")
+        ))?,
     };
 
-    // let a = [1, 2] in
-    // let mut b = [1, 4] in
-    //     let z = a.0 in
-    //         b = a; b
+    println!("AST:\n    {:?}", spast);
 
-    println!("AST:\n    {:?}", ast);
+    typechecker::pause();
 
     println!("\n\n\n\n\n");
 
-    let mut gamma: Gamma = Gamma { vars: Vec::new() };
-    let mut eta: Eta = Eta {
-        loans: HashMap::new(),
-    };
+    let mut gamma: Gamma = Gamma::new();
+    let mut eta: Eta = Eta::new();
     let mut mu: Mu = Mu::new();
 
     let tast = typechecker::type_expr(
         &mut File::new(file_name, tokens),
-        (ast, 0..87),
+        spast,
         &mut gamma,
         &mut eta,
         &mut mu,
