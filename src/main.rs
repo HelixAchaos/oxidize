@@ -1,4 +1,4 @@
-use crate::typechecker::{Eta, File, Gamma, Mu};
+use crate::{typechecker::{Eta, File, Gamma, Mu}, lexer::Token};
 use chumsky::Parser;
 use std::collections::VecDeque;
 
@@ -25,10 +25,9 @@ fn main() -> Result<(), String> {
             todo!("What should empty file evaluate to? Unit? Error?")
         }
     } else {
-        lex_errs.into_iter().fold("".to_string(), |acc, e| {
+        Err(lex_errs.into_iter().fold("".to_string(), |acc, e| {
             format!("{}\nLex error: {}", acc, e)
-        });
-        Err("".to_string())?
+        }))?
     };
 
     let mut tokens = VecDeque::from(tokens);
@@ -55,17 +54,26 @@ fn main() -> Result<(), String> {
     let mut gamma: Gamma = Gamma::new();
     let mut eta: Eta = Eta::new();
     let mut mu: Mu = Mu::new();
+    let file = &mut File::new(file_name, tokens);
 
-    let tast = typechecker::type_expr(
-        &mut File::new(file_name, tokens),
-        spast,
-        &mut gamma,
-        &mut eta,
-        &mut mu,
-    )?
-    .extract_tast();
-
-    println!("TAST:\n    {:?}", tast);
+    match typechecker::type_expr(file, spast, &mut gamma, &mut eta, &mut mu, true) {
+        Ok(_stast) => {
+            // let tast = stast.extract_tast();
+            // println!("TAST:\n    {:?}", tast);
+            typechecker::cls();
+            typechecker::diagnostics(&gamma, &eta, &mu);
+            file.reveal(src.len());
+            println!("{}", "-".to_string().repeat(80));
+            println!("\nType checked! Yipee.");
+        }
+        Err(e) => {
+            typechecker::cls();
+            typechecker::diagnostics(&gamma, &eta, &mu);
+            file.reveal(e.span.end);
+            println!("{}", "-".to_string().repeat(80));
+            println!("\n{}", e.prettify(src));
+        }
+    };
 
     // let mut vars: Vec<Context> = vec![HashMap::new()];
     // let mut delta: Delta = Delta {

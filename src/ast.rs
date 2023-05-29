@@ -25,9 +25,10 @@ impl ELhs {
 pub enum EExpr {
     Unit,
     Num(i64),
-    Lvalue(ELhs),
-    Ref(ELhs),
-    MutRef(ELhs),
+    Bool(bool),
+    Lvalue(Spanned<ELhs>),
+    Ref(Spanned<ELhs>),
+    MutRef(Spanned<ELhs>),
     Neg(Box<Spanned<Self>>),
     Gt(Box<Spanned<Self>>, Box<Spanned<Self>>),
     Lt(Box<Spanned<Self>>, Box<Spanned<Self>>),
@@ -37,7 +38,7 @@ pub enum EExpr {
     Div(Box<Spanned<Self>>, Box<Spanned<Self>>),
     Cond(Box<Spanned<Self>>, Box<Spanned<Self>>, Box<Spanned<Self>>),
     Tuple(Vec<Spanned<Self>>),
-    Assign(ELhs, Box<Spanned<Self>>),
+    Assign(Spanned<ELhs>, Box<Spanned<Self>>),
     Seq(Box<Spanned<Self>>, Box<Spanned<Self>>),
     Let {
         name: String,
@@ -57,9 +58,10 @@ impl EExpr {
         match self {
             Unit => "unit".to_string(),
             Num(n) => format!("{}", n),
-            Lvalue(lhs) => lhs.to_string(),
-            Ref(lhs) => format!("&{}", lhs.to_string()),
-            MutRef(lhs) => format!("&mut {}", lhs.to_string()),
+            Bool(b) => format!("{}", b),
+            Lvalue((lhs, _)) => lhs.to_string(),
+            Ref((lhs, _)) => format!("&{}", lhs.to_string()),
+            MutRef((lhs, _)) => format!("&mut {}", lhs.to_string()),
             Neg(e) => format!("(-{})", e.0.to_string()),
             Gt(e1, e2) => format!("({} > {})", e1.0.to_string(), e2.0.to_string()),
             Lt(e1, e2) => format!("({} < {})", e1.0.to_string(), e2.0.to_string()),
@@ -81,7 +83,7 @@ impl EExpr {
                     .collect::<Vec<_>>()
                     .join(", ")
             ),
-            Assign(lhs, e) => format!("{} = {}", lhs.to_string(), e.0.to_string()),
+            Assign((lhs, _), e) => format!("{} = {}", lhs.to_string(), e.0.to_string()),
             Seq(e1, e2) => format!("{}; {}", e1.0.to_string(), e2.0.to_string()),
             Let { name, rhs, then } => {
                 format!(
@@ -110,13 +112,24 @@ pub enum TLhs {
     Index(Type, Box<Spanned<Self>>, u64),
 }
 
+impl TLhs {
+    pub fn to_string(&self) -> String {
+        match self {
+            TLhs::Var(_, v) => v.clone(),
+            TLhs::DeRef(_, tlhs ) => format!("*{}", tlhs.0.to_string()),
+            TLhs::Index(_, tlhs, i) => format!("{}.{i}", tlhs.0.to_string())
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub enum STExpr {
     Unit(SType),
     Num(SType, i64),
-    Lvalue(SType, TLhs),
-    Ref(SType, TLhs),
-    MutRef(SType, TLhs),
+    Bool(SType, bool),
+    Lvalue(SType, Spanned<TLhs>),
+    Ref(SType, Spanned<TLhs>),
+    MutRef(SType, Spanned<TLhs>),
     Neg(SType, Box<Spanned<Self>>),
     Gt(SType, Box<Spanned<Self>>, Box<Spanned<Self>>),
     Lt(SType, Box<Spanned<Self>>, Box<Spanned<Self>>),
@@ -131,7 +144,7 @@ pub enum STExpr {
         Box<Spanned<Self>>,
     ),
     Tuple(SType, Vec<Spanned<Self>>),
-    Assign(SType, TLhs, Box<Spanned<Self>>),
+    Assign(SType, Spanned<TLhs>, Box<Spanned<Self>>),
     Seq(SType, Box<Spanned<Self>>, Box<Spanned<Self>>),
     Let {
         name: String,
@@ -180,6 +193,7 @@ impl STExpr {
         match self {
             Unit(t) => t,
             Num(t, _) => t,
+            Bool(t, _) => t,
             Lvalue(t, _) => t,
             Ref(t, _) => t,
             MutRef(t, _) => t,
@@ -214,6 +228,7 @@ impl STExpr {
         match self.to_owned() {
             Unit((t, _)) => TExpr::Unit(t),
             Num((t, _), n) => TExpr::Num(t, n),
+            Bool((t, _), b) => TExpr::Bool(t, b),
             Lvalue((t, _), lhs) => TExpr::Lvalue(t, lhs),
             Ref((t, _), lhs) => TExpr::Ref(t, lhs),
             MutRef((t, _), lhs) => TExpr::MutRef(t, lhs),
@@ -297,9 +312,10 @@ impl STExpr {
 pub enum TExpr {
     Unit(Type),
     Num(Type, i64),
-    Lvalue(Type, TLhs),
-    Ref(Type, TLhs),
-    MutRef(Type, TLhs),
+    Bool(Type, bool),
+    Lvalue(Type, Spanned<TLhs>),
+    Ref(Type, Spanned<TLhs>),
+    MutRef(Type, Spanned<TLhs>),
     Neg(Type, Box<Spanned<Self>>),
     Gt(Type, Box<Spanned<Self>>, Box<Spanned<Self>>),
     Lt(Type, Box<Spanned<Self>>, Box<Spanned<Self>>),
@@ -314,7 +330,7 @@ pub enum TExpr {
         Box<Spanned<Self>>,
     ),
     Tuple(Type, Vec<Spanned<Self>>),
-    Assign(Type, TLhs, Box<Spanned<Self>>),
+    Assign(Type, Spanned<TLhs>, Box<Spanned<Self>>),
     Seq(Type, Box<Spanned<Self>>, Box<Spanned<Self>>),
     Let {
         name: String,
@@ -336,9 +352,10 @@ impl TExpr {
         match self.to_owned() {
             Unit(_) => EExpr::Unit,
             Num(_, n) => EExpr::Num(n),
-            Lvalue(_, lhs) => EExpr::Lvalue(lhs.extract_lhs()),
-            Ref(_, lhs) => EExpr::Ref(lhs.extract_lhs()),
-            MutRef(_, lhs) => EExpr::MutRef(lhs.extract_lhs()),
+            Bool(_, b) => EExpr::Bool(b),
+            Lvalue(_, (lhs, lhs_span)) => EExpr::Lvalue((lhs.extract_lhs(), lhs_span)),
+            Ref(_, (lhs, lhs_span)) => EExpr::Ref((lhs.extract_lhs(), lhs_span)),
+            MutRef(_, (lhs, lhs_span)) => EExpr::MutRef((lhs.extract_lhs(), lhs_span)),
             Neg(_, e) => EExpr::Neg(Box::new((e.0.extract_ast(), e.1))),
             Gt(_, e1, e2) => EExpr::Gt(
                 Box::new((e1.0.extract_ast(), e1.1)),
@@ -375,8 +392,8 @@ impl TExpr {
                     .map(|texpr| (texpr.0.extract_ast(), texpr.1.clone()))
                     .collect(),
             ),
-            Assign(_, lhs, e) => {
-                EExpr::Assign(lhs.extract_lhs(), Box::new((e.0.extract_ast(), e.1)))
+            Assign(_, (lhs, lhs_span), e) => {
+                EExpr::Assign((lhs.extract_lhs(), lhs_span), Box::new((e.0.extract_ast(), e.1)))
             }
             Seq(_, e1, e2) => EExpr::Seq(
                 Box::new((e1.0.extract_ast(), e1.1)),

@@ -1,6 +1,3 @@
-use std::error::Error;
-use std::fmt;
-
 use chumsky::prelude::*;
 
 use crate::ast::Span;
@@ -17,6 +14,8 @@ pub enum Token {
     If,
     Then,
     Else,
+    True,
+    False
 }
 
 impl Token {
@@ -84,6 +83,8 @@ pub fn lex() -> impl Parser<char, Vec<(Token, Span)>, Error = Simple<char>> + Cl
         "if" => Token::If,
         "then" => Token::Then,
         "else" => Token::Else,
+        "true" => Token::True,
+        "false" => Token::False,
         _ => Token::Var(ident),
     });
 
@@ -97,7 +98,6 @@ pub fn lex() -> impl Parser<char, Vec<(Token, Span)>, Error = Simple<char>> + Cl
 
     token
         .map_with_span(|tok, span| (tok, span))
-        // .padded_by(comment.repeated())
         .padded_by(whitespace.repeated())
         .repeated()
         .then_ignore(end())

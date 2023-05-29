@@ -1,7 +1,8 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::fmt;
 
-use crate::typechecker::{Eta, Gamma, Mu};
+use crate::ast::Span;
+use crate::typechecker::Eta;
 
 pub type Var = String;
 pub type Address = u64;
@@ -40,39 +41,29 @@ impl fmt::Display for Type {
     }
 }
 
-// impl Type {
-// pub fn unify(t1: Self, t2: Self) -> Result<Self, String> {
-//     match (t1.clone(), t2) {
-//         (Type::Bool, Type::Bool) | (Type::Int, Type::Int) | (Type::Unit, Type::Unit) => Ok(t1),
-//         (Type::Tuple(types1), Type::Tuple(types2)) => {
-//             if types1 == types2 {
-//                 Ok(t1)
-//             } else {
-//                 Err(format!("The types of the tuples' elements don't match."))
-//             }
-//         }
-//         (Type::Ref(true, t1), Type::Ref(true, t2)) => {
-//             if t1 == t2 {
-//                 Ok(*t1)
-//             } else {
-//                 Err(format!("The types of the tuples' elements don't match."))
-//             }
-//         }
-//         (Type::Ref(false, t1), Type::Ref(false, t2)) => {
-//             if t1 == t2 {
-//                 Ok(*t1)
-//             } else {
-//                 Err(format!("The types of the tuples' elements don't match."))
-//             }
-//         }
-//         (Type::Ref(false, _), Type::Ref(true, _))
-//         | (Type::Ref(true, _), Type::Ref(false, _)) => Err(format!(
-//             "Mixing mutable references and immutable references is not okay."
-//         )),
-//         _ => Err(format!("The types trivially don't match.")),
-//     }
-// }
-// }
+#[derive(Debug)]
+pub struct TypeError {
+    pub msg: String,
+    pub span: Span,
+}
+
+impl TypeError {
+    pub fn prettify(&self, src: String) -> String {
+        format!(
+            "At {:?}, TypeCheckError was raised: {}\n\nCode snippet:\n```\n{}\n```",
+            self.span, self.msg, &src[self.span.clone()]
+        )
+    }
+    pub fn wrap(msg: String, span: Span) -> TypeError {
+        TypeError { msg, span}
+    }
+    pub fn result_wrap<T>(result: Result<T, String>, span: Span) -> Result<T, TypeError> {
+        match result {
+            Ok(t) => Ok(t),
+            Err(msg) => Err(TypeError::wrap(msg, span))
+        }
+    }
+}
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum S {
@@ -84,33 +75,63 @@ pub enum S {
 }
 
 impl S {
-    pub fn validate(&self, old_s: &Self, target: Address) -> Result<(), String> {
+    pub fn validate(&self, old_s: &Self, target: Address, span: Span) -> Result<(), TypeError> {
         match (self, old_s) {
             (&S::None, _) | (_, &S::None) => Ok(()),
-            (&S::Moved(Some(_)), &S::Moved(Some(_))) => Err(format!("attempted to move a moved value (expected to be at address {target})"))?,
-            (&S::Moved(Some(_)), &S::Moved(None)) => Err(format!("attempted to move a mutable reference to a dropped value (expected to be at address {target})"))?,
-            (&S::Moved(Some(_)), &S::ImmutRef(_)) => Err(format!("attempted to move a mutable reference to an immutably referenced value at address {target}"))?,
-            (&S::Moved(Some(_)), &S::MutRef(_)) => Err(format!("attempted to move a mutable reference to a mutably referenced value at address {target}"))?,
-            (&S::Moved(Some(_)), &S::Union(ref ss)) => Ok({ss.iter().map(|s| self.validate(s, target)).collect::<Result<_, _>>()?;}),
-            (&S::Moved(None), &S::Moved(Some(_))) => Err(format!("attempted to drop a moved value (expected to be at address {target})"))?,
-            (&S::Moved(None), &S::Moved(None)) => Err(format!("attempted to drop a mutable reference to a dropped value (expected to be at address {target})"))?,
-            (&S::Moved(None), &S::ImmutRef(_)) => Err(format!("attempted to drop a mutable reference to an immutably referenced value at address {target}"))?,
-            (&S::Moved(None), &S::MutRef(_)) => Err(format!("attempted to drop a mutable reference to a mutably referenced value at address {target}"))?,
-            (&S::Moved(None), &S::Union(ref ss)) => Ok({ss.iter().map(|s| self.validate(s, target)).collect::<Result<_, _>>()?;}),
-            (&S::MutRef(_), &S::Moved(Some(_))) => Err(format!("attempted to create a mutable reference to a moved value (expected to be at address {target})"))?,
-            (&S::MutRef(_), &S::Moved(None)) => Err(format!("attempted to create a mutable reference to a dropped value (expected to be at address {target})"))?,
-            (&S::MutRef(_), &S::ImmutRef(_)) => Err(format!("attempted to create a mutable reference to an immutably referenced value at address {target}"))?,
-            (&S::MutRef(_), &S::MutRef(_)) => Err(format!("attempted to create a mutable reference to a mutably referenced value at address {target}"))?,
-            (&S::MutRef(_), &S::Union(ref ss)) => Ok({ss.iter().map(|s| self.validate(s, target)).collect::<Result<_, _>>()?;}),
-            (&S::ImmutRef(_), &S::Moved(Some(_))) => Err(format!("attempted to create a immutable reference to a moved value (expected to be at address {target})"))?,
-            (&S::ImmutRef(_), &S::Moved(None)) => Err(format!("attempted to create a immutable reference to a mutable reference to a dropped value (expected to be at address {target})"))?,
-            (&S::ImmutRef(_), &S::ImmutRef(_)) => Err(format!("attempted to create a immutable reference to a mutable reference to an immutably referenced value at address {target}"))?,
-            (&S::ImmutRef(_), &S::MutRef(_)) => Err(format!("attempted to create a immutable reference to a mutable reference to a mutably referenced value at address {target}"))?,
-            (&S::ImmutRef(_), &S::Union(ref ss)) => Ok({ss.iter().map(|s| self.validate(s, target)).collect::<Result<_, _>>()?;}),
-            (&S::Union(ref ss), &S::Moved(_)) => Ok({ss.iter().map(|s| s.validate(old_s, target)).collect::<Result<_, _>>()?;}),
-            (&S::Union(ref ss), &S::ImmutRef(_)) => Ok({ss.iter().map(|s| s.validate(old_s, target)).collect::<Result<_, _>>()?;}),
-            (&S::Union(ref ss), &S::MutRef(_)) => Ok({ss.iter().map(|s| s.validate(old_s, target)).collect::<Result<_, _>>()?;}),
-            (&S::Union(ref ss), &S::Union(_)) => Ok({ss.iter().map(|s| s.validate(old_s, target)).collect::<Result<_, _>>()?;}),
+            (&S::Moved(Some(_)), &S::Moved(Some(_))) => Err(
+                TypeError::wrap(format!("attempted to move a moved value (expected to be at address {target})"), span)
+            )?,
+            (&S::Moved(Some(_)), &S::Moved(None)) => Err(
+                TypeError::wrap(format!("attempted to move a mutable reference to a dropped value (expected to be at address {target})"), span)
+            )?,
+            (&S::Moved(Some(_)), &S::ImmutRef(_)) => Err(
+                TypeError::wrap(format!("attempted to move a mutable reference to an immutably referenced value at address {target}"), span)
+            )?,
+            (&S::Moved(Some(_)), &S::MutRef(_)) => Err(
+                TypeError::wrap(format!("attempted to move a mutable reference to a mutably referenced value at address {target}"), span)
+            )?,
+            (&S::Moved(Some(_)), &S::Union(ref ss)) => Ok({ss.iter().map(|s| self.validate(s, target, span.clone())).collect::<Result<_, _>>()?;}),
+            (&S::Moved(None), &S::Moved(Some(_))) => Err(
+                TypeError::wrap(format!("attempted to drop a moved value (expected to be at address {target})"), span)
+            )?,
+            (&S::Moved(None), &S::Moved(None)) => Err(
+                TypeError::wrap(format!("attempted to drop a mutable reference to a dropped value (expected to be at address {target})"), span)
+            )?,
+            (&S::Moved(None), &S::ImmutRef(_)) => Err(
+                TypeError::wrap(format!("attempted to drop a mutable reference to an immutably referenced value at address {target}"), span)
+            )?,
+            (&S::Moved(None), &S::MutRef(_)) => Err(
+                TypeError::wrap(format!("attempted to drop a mutable reference to a mutably referenced value at address {target}"), span)
+            )?,
+            (&S::Moved(None), &S::Union(ref ss)) => Ok({ss.iter().map(|s| self.validate(s, target, span.clone())).collect::<Result<_, _>>()?;}),
+            (&S::MutRef(_), &S::Moved(Some(_))) => Err(
+                TypeError::wrap(format!("attempted to create a mutable reference to a moved value (expected to be at address {target})"), span)
+            )?,
+            (&S::MutRef(_), &S::Moved(None)) => Err(
+                TypeError::wrap(format!("attempted to create a mutable reference to a dropped value (expected to be at address {target})"), span)
+            )?,
+            (&S::MutRef(_), &S::ImmutRef(_)) => Err(
+                TypeError::wrap(format!("attempted to create a mutable reference to an immutably referenced value at address {target}"), span)
+            )?,
+            (&S::MutRef(_), &S::MutRef(_)) => Err(
+                TypeError::wrap(format!("attempted to create a mutable reference to a mutably referenced value at address {target}"), span)
+            )?,
+            (&S::MutRef(_), &S::Union(ref ss)) => Ok({ss.iter().map(|s| self.validate(s, target, span.clone())).collect::<Result<_, _>>()?;}),
+            (&S::ImmutRef(_), &S::Moved(Some(_))) => Err(
+                TypeError::wrap(format!("attempted to create an immutable reference to a moved value (expected to be at address {target})"), span)
+            )?,
+            (&S::ImmutRef(_), &S::Moved(None)) => Err(
+                TypeError::wrap(format!("attempted to create an immutable reference to a dropped value (expected to be at address {target})"), span)
+            )?,
+            (&S::ImmutRef(_), &S::ImmutRef(_)) => Ok(()),
+            (&S::ImmutRef(_), &S::MutRef(_)) => Err(
+                TypeError::wrap(format!("attempted to create an immutable reference to a mutably referenced value at address {target}"), span)
+            )?,
+            (&S::ImmutRef(_), &S::Union(ref ss)) => Ok({ss.iter().map(|s| self.validate(s, target, span.clone())).collect::<Result<_, _>>()?;}),
+            (&S::Union(ref ss), &S::Moved(_)) => Ok({ss.iter().map(|s| s.validate(old_s, target, span.clone())).collect::<Result<_, _>>()?;}),
+            (&S::Union(ref ss), &S::ImmutRef(_)) => Ok({ss.iter().map(|s| s.validate(old_s, target, span.clone())).collect::<Result<_, _>>()?;}),
+            (&S::Union(ref ss), &S::MutRef(_)) => Ok({ss.iter().map(|s| s.validate(old_s, target, span.clone())).collect::<Result<_, _>>()?;}),
+            (&S::Union(ref ss), &S::Union(_)) => Ok({ss.iter().map(|s| s.validate(old_s, target, span.clone())).collect::<Result<_, _>>()?;}),
         }
     }
     fn is_move(&self) -> i8 {
@@ -170,7 +191,7 @@ impl S {
             S::None => match tau {
                 Some(Type::Tuple(taus)) => {
                     let ss = (1..=taus.len())
-                        .map(|l| eta.get(ell + (l as u64)).unwrap())
+                        .map(|l| eta.get(&(ell + (l as u64))).unwrap())
                         .collect::<Vec<S>>();
 
                     let mut string = String::new();
@@ -185,12 +206,22 @@ impl S {
                     }
 
                     if ss.iter().all(|s| s.is_drop() == 1) {
-                        string.push_str("completely immutably_referenced")
+                        string.push_str("completely-but-perhaps-discontiguously dropped")
                     } else if ss.iter().any(|s| s.is_drop() == 1) {
-                        string.push_str("partially immutably_referenced")
+                        string.push_str("partially dropped")
                     } else if ss.iter().all(|s| s.is_drop() == 0) {
-                        string.push_str("maybe completely immutably_referenced")
+                        string.push_str("maybe completely-but-perhaps-discontiguously dropped")
                     } else if ss.iter().any(|s| s.is_drop() == 0) {
+                        string.push_str("maybe partially dropped")
+                    }
+
+                    if ss.iter().all(|s| s.is_immut_ref() == 1) {
+                        string.push_str("completely immutably_referenced")
+                    } else if ss.iter().any(|s| s.is_immut_ref() == 1) {
+                        string.push_str("partially immutably_referenced")
+                    } else if ss.iter().all(|s| s.is_immut_ref() == 0) {
+                        string.push_str("maybe completely immutably_referenced")
+                    } else if ss.iter().any(|s| s.is_immut_ref() == 0) {
                         string.push_str("maybe partially immutably_referenced")
                     }
 
@@ -256,11 +287,11 @@ impl S {
         }
     }
 
-    pub fn remove(&self, addr: Address) -> Self {
+    pub fn remove(&self, addr: &Address) -> Self {
         match self {
             S::Union(ss) => S::Union(ss.into_iter().map(|s| s.remove(addr)).collect()),
             S::MutRef(s) => {
-                if s.clone() == addr {
+                if s == addr {
                     S::None
                 } else {
                     self.clone()
@@ -274,6 +305,13 @@ impl S {
                     S::ImmutRef(ss_prime)
                 } else {
                     S::None
+                }
+            }
+            S::Moved(Some(ell)) => {
+                if addr == ell {
+                    S::Moved(None)
+                } else {
+                    S::Moved(Some(*ell))
                 }
             }
             _ => self.clone(),
