@@ -4,9 +4,7 @@ use crate::ast::{EExpr, ELhs, Spanned};
 use crate::lexer::{ParseError, Token};
 
 fn consume(tokens: &mut VecDeque<Spanned<Token>>) -> Result<Spanned<Token>, ParseError> {
-    println!("consume-{}", tokens.len());
     if let Some(next) = tokens.pop_front() {
-        println!("consumed {:?}", tokens.len());
         Ok(next)
     } else {
         Err(ParseError {
@@ -21,15 +19,12 @@ fn metaparse_or<T>(
     f1: fn(&mut VecDeque<Spanned<Token>>) -> Result<Spanned<T>, ParseError>,
     f2: fn(&mut VecDeque<Spanned<Token>>) -> Result<Spanned<T>, ParseError>,
 ) -> Result<Spanned<T>, ParseError> {
-    println!("metaparse_or");
     let mut tokens_cop = tokens.clone();
     if let Ok(spanned_expr) = f1(&mut tokens_cop) {
-        println!("metaparse_or-fst-succ\n");
         tokens.clear();
         tokens.extend(tokens_cop);
         Ok(spanned_expr)
     } else {
-        println!("metaparse_or-fst-fail\n");
         f2(tokens)
     }
 }
@@ -76,13 +71,10 @@ fn macroparse_operator_binary_infix_hom<T>(
     bop_tok_funcs: Vec<(Vec<Token>, fn(Box<Spanned<T>>, Box<Spanned<T>>) -> T)>,
     parse_inside: fn(&mut VecDeque<Spanned<Token>>) -> Result<Spanned<T>, ParseError>,
 ) -> Result<Spanned<T>, ParseError> {
-    println!("binar_infix_hom\n");
     let mut spanned_e = parse_inside(tokens)?;
     let span_start = spanned_e.1.start;
     let mut span_end;
-    println!("parsed \n");
     while tokens.len() > 0 {
-        println!("binop\n");
         if let Some((toks, f)) = bop_tok_funcs
             .iter()
             .find(|(toks, _)| lookahead_match_tokens(tokens, toks).0)
@@ -101,7 +93,6 @@ fn macroparse_operator_binary_infix_hom<T>(
             break;
         }
     }
-    println!("reaced\n");
     Ok(spanned_e)
 }
 
@@ -137,7 +128,6 @@ fn lookahead_match_tokens_conj(
 }
 
 fn parse_lhs_name(tokens: &mut VecDeque<Spanned<Token>>) -> Result<Spanned<ELhs>, ParseError> {
-    println!("lhs_name{:?}\n", tokens);
     let (tok, span) = consume(tokens)?;
     match tok {
         Token::Var(s) => Ok((ELhs::Var(s), span.to_owned())),
@@ -149,7 +139,6 @@ fn parse_lhs_name(tokens: &mut VecDeque<Spanned<Token>>) -> Result<Spanned<ELhs>
 }
 
 fn parse_lhs_deref(tokens: &mut VecDeque<Spanned<Token>>) -> Result<Spanned<ELhs>, ParseError> {
-    println!("lhs_deref\n");
     let (star, star_span) = consume(tokens)?;
     match star {
         Token::Op(op) if op == "*".to_string() => {
@@ -166,7 +155,6 @@ fn parse_lhs_deref(tokens: &mut VecDeque<Spanned<Token>>) -> Result<Spanned<ELhs
 }
 
 fn parse_lhs_index(tokens: &mut VecDeque<Spanned<Token>>) -> Result<Spanned<ELhs>, ParseError> {
-    println!("lhs_index\n");
     let mut spanned_lhs = parse_lhs_name(tokens)?;
     while lookahead_match_tokens(tokens, &vec![Token::Op(".".to_string())]).0 {
         let (_, dot_span) = consume(tokens)?;
@@ -196,7 +184,6 @@ fn parse_lhs(tokens: &mut VecDeque<Spanned<Token>>) -> Result<Spanned<ELhs>, Par
 }
 
 fn parse_expr_val(tokens: &mut VecDeque<Spanned<Token>>) -> Result<Spanned<EExpr>, ParseError> {
-    println!("val\n");
     let (val, val_span) = consume(tokens)?;
 
     match val {
@@ -212,18 +199,15 @@ fn parse_expr_val(tokens: &mut VecDeque<Spanned<Token>>) -> Result<Spanned<EExpr
 }
 
 fn parse_expr_lvalue(tokens: &mut VecDeque<Spanned<Token>>) -> Result<Spanned<EExpr>, ParseError> {
-    println!("lvalue\n");
     let (lhs, lhs_span) = parse_lhs(tokens)?;
     Ok((EExpr::Lvalue((lhs, lhs_span.clone())), lhs_span))
 }
 
 fn parse_expr_atom(tokens: &mut VecDeque<Spanned<Token>>) -> Result<Spanned<EExpr>, ParseError> {
-    println!("atom\n");
     metaparse_or(tokens, parse_expr_val, parse_expr_lvalue)
 }
 
 fn parse_expr_oppar(tokens: &mut VecDeque<Spanned<Token>>) -> Result<Spanned<EExpr>, ParseError> {
-    println!("oppar\n");
     let (oppar, oppar_span) = consume(tokens)?;
     match oppar {
         Token::Op(op) if op == "(".to_string() => {
@@ -249,7 +233,6 @@ fn parse_expr_oppar(tokens: &mut VecDeque<Spanned<Token>>) -> Result<Spanned<EEx
 fn parse_expr_immut_ref(
     tokens: &mut VecDeque<Spanned<Token>>,
 ) -> Result<Spanned<EExpr>, ParseError> {
-    println!("immut ref\n");
     macroparse_operator_unary_prefix_het(
         tokens,
         vec![Token::Op("&".to_string())],
@@ -259,7 +242,6 @@ fn parse_expr_immut_ref(
 }
 
 fn parse_expr_mut_ref(tokens: &mut VecDeque<Spanned<Token>>) -> Result<Spanned<EExpr>, ParseError> {
-    println!("mut ref\n");
     macroparse_operator_unary_prefix_het(
         tokens,
         vec![Token::Op("&".to_string()), Token::Mut],
@@ -271,7 +253,6 @@ fn parse_expr_mut_ref(tokens: &mut VecDeque<Spanned<Token>>) -> Result<Spanned<E
 fn parse_expr_mut_uminus(
     tokens: &mut VecDeque<Spanned<Token>>,
 ) -> Result<Spanned<EExpr>, ParseError> {
-    println!("uminus\n");
     macroparse_operator_unary_prefix_hom(
         tokens,
         vec![Token::Op("-".to_string())],
@@ -281,7 +262,6 @@ fn parse_expr_mut_uminus(
 }
 
 fn parse_expr_unary(tokens: &mut VecDeque<Spanned<Token>>) -> Result<Spanned<EExpr>, ParseError> {
-    println!("unary\n");
     if lookahead_match_tokens(tokens, &vec![Token::Op("&".to_string()), Token::Mut]).0 {
         parse_expr_mut_ref(tokens)
     } else if lookahead_match_tokens(tokens, &vec![Token::Op("&".to_string())]).0 {
@@ -294,7 +274,6 @@ fn parse_expr_unary(tokens: &mut VecDeque<Spanned<Token>>) -> Result<Spanned<EEx
 }
 
 fn parse_expr_product(tokens: &mut VecDeque<Spanned<Token>>) -> Result<Spanned<EExpr>, ParseError> {
-    println!("product\n");
     macroparse_operator_binary_infix_hom(
         tokens,
         vec![
@@ -306,7 +285,6 @@ fn parse_expr_product(tokens: &mut VecDeque<Spanned<Token>>) -> Result<Spanned<E
 }
 
 fn parse_expr_sum(tokens: &mut VecDeque<Spanned<Token>>) -> Result<Spanned<EExpr>, ParseError> {
-    println!("sum\n");
     macroparse_operator_binary_infix_hom(
         tokens,
         vec![
@@ -318,7 +296,6 @@ fn parse_expr_sum(tokens: &mut VecDeque<Spanned<Token>>) -> Result<Spanned<EExpr
 }
 
 fn parse_expr_cmp(tokens: &mut VecDeque<Spanned<Token>>) -> Result<Spanned<EExpr>, ParseError> {
-    println!("cmp\n");
     macroparse_operator_binary_infix_hom(
         tokens,
         vec![
@@ -330,7 +307,6 @@ fn parse_expr_cmp(tokens: &mut VecDeque<Spanned<Token>>) -> Result<Spanned<EExpr
 }
 
 fn parse_expr_cond(tokens: &mut VecDeque<Spanned<Token>>) -> Result<Spanned<EExpr>, ParseError> {
-    println!("cond\n");
     let (if_tok, if_span) = consume(tokens)?;
     match if_tok {
         Token::If => Ok(()),
@@ -376,16 +352,13 @@ fn parse_expr_cond(tokens: &mut VecDeque<Spanned<Token>>) -> Result<Spanned<EExp
 }
 
 fn parse_expr_tuple(tokens: &mut VecDeque<Spanned<Token>>) -> Result<Spanned<EExpr>, ParseError> {
-    println!("tuple\n");
     let (obbar_tok, obbar_span) = consume(tokens)?;
     let span_start = obbar_span.start;
     let mut span_end = obbar_span.end;
     obbar_tok.posh_expect(Token::Op("[".to_string()), obbar_span, "While parsing a conditional expression, the parser expected an `[` token to be at the start".to_string())?;
 
-    println!("tuple-1\n");
     let exprs: &mut Vec<Spanned<EExpr>> = &mut vec![];
     while tokens.len() > 0 {
-        println!("tuple-element\n");
         let (tok, tok_span) = consume(tokens)?;
 
         if tok == Token::Op("]".to_string()) {
@@ -409,12 +382,10 @@ fn parse_expr_tuple(tokens: &mut VecDeque<Spanned<Token>>) -> Result<Spanned<EEx
             })?
         }
     }
-    println!("tuple-end\n");
     Ok((EExpr::Tuple(exprs.clone()), span_start..span_end))
 }
 
 fn parse_expr_normal(tokens: &mut VecDeque<Spanned<Token>>) -> Result<Spanned<EExpr>, ParseError> {
-    println!("normal\n");
     if lookahead_match_tokens(tokens, &vec![Token::Op("[".to_string())]).0 {
         parse_expr_tuple(tokens)
     } else if lookahead_match_tokens(tokens, &vec![Token::If]).0 {
@@ -426,29 +397,19 @@ fn parse_expr_normal(tokens: &mut VecDeque<Spanned<Token>>) -> Result<Spanned<EE
 
 fn parse_expr_assign(tokens: &mut VecDeque<Spanned<Token>>) -> Result<Spanned<EExpr>, ParseError> {
     let targets: &mut Vec<Spanned<ELhs>> = &mut vec![];
-    println!("assign {:?}\n", tokens);
-
-    println!("lookahead_is_lhs(tokens) = {:?}", lookahead_is_lhs(tokens));
-    println!(
-        "lookahead_match_tokens(tokens, '=') = {:?}",
-        lookahead_match_tokens(tokens, &vec![Token::Op("=".to_string())])
-    );
 
     while lookahead_match_tokens_conj(tokens, lookahead_is_lhs, |tokens| {
         lookahead_match_tokens(tokens, &vec![Token::Op("=".to_string())])
     })
     .0
     {
-        println!("lhs assign\n");
         let spanned_lhs = parse_lhs(tokens)?;
         let (eq, eq_span) = consume(tokens)?;
         eq.expect(Token::Op("=".to_string()), eq_span)?;
         targets.push(spanned_lhs);
     }
 
-    println!("assign--------------------------");
     let spanned_e = parse_expr_normal(tokens)?;
-    println!("assign--------------spanned_e; {:?}", spanned_e);
     Ok(targets
         .into_iter()
         .rfold(spanned_e, |acc, (lhs, lhs_span)| {
@@ -458,7 +419,6 @@ fn parse_expr_assign(tokens: &mut VecDeque<Spanned<Token>>) -> Result<Spanned<EE
 }
 
 fn parse_expr_seq(tokens: &mut VecDeque<Spanned<Token>>) -> Result<Spanned<EExpr>, ParseError> {
-    println!("parse_expr_seq\n");
     macroparse_operator_binary_infix_hom(
         tokens,
         vec![(vec![Token::Op(";".to_string())], EExpr::Seq)],
@@ -477,14 +437,11 @@ fn parse_ident(tokens: &mut VecDeque<Spanned<Token>>) -> Result<String, ParseErr
 }
 
 fn parse_expr_let(tokens: &mut VecDeque<Spanned<Token>>) -> Result<Spanned<EExpr>, ParseError> {
-    println!("let\n");
     let spanned_let = consume(tokens)?;
     let start = spanned_let.1.start;
     spanned_let.0.expect(Token::Let, spanned_let.1)?;
-    println!("let{}\n", tokens.len());
 
     let name = parse_ident(tokens)?;
-    println!("let{}\n", tokens.len());
 
     let spanned_eq = consume(tokens)?;
     spanned_eq
@@ -492,12 +449,10 @@ fn parse_expr_let(tokens: &mut VecDeque<Spanned<Token>>) -> Result<Spanned<EExpr
         .expect(Token::Op("=".to_string()), spanned_eq.1)?;
 
     let rhs = parse_expr_normal(tokens)?;
-    println!("let-then-rhs: {:?}\n", rhs);
 
     let spanned_in = consume(tokens)?;
     spanned_in.0.expect(Token::In, spanned_in.1)?;
 
-    println!("let-then-expr\n");
     let then = parse_expr(tokens)?;
 
     let span = (start)..(then.1.end);
@@ -512,7 +467,6 @@ fn parse_expr_let(tokens: &mut VecDeque<Spanned<Token>>) -> Result<Spanned<EExpr
 }
 
 fn parse_expr_mutlet(tokens: &mut VecDeque<Spanned<Token>>) -> Result<Spanned<EExpr>, ParseError> {
-    println!("mutlet\n");
     let spanned_let = consume(tokens)?;
     let start = spanned_let.1.start;
     spanned_let.0.expect(Token::Let, spanned_let.1)?;
@@ -545,7 +499,6 @@ fn parse_expr_mutlet(tokens: &mut VecDeque<Spanned<Token>>) -> Result<Spanned<EE
 }
 
 pub fn parse_expr(tokens: &mut VecDeque<Spanned<Token>>) -> Result<Spanned<EExpr>, ParseError> {
-    println!("parse_expr\n");
     if lookahead_match_tokens(tokens, &vec![Token::Let, Token::Mut]).0 {
         parse_expr_mutlet(tokens)
     } else if lookahead_match_tokens(tokens, &vec![Token::Let]).0 {

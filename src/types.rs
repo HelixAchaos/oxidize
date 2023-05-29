@@ -82,26 +82,26 @@ impl S {
                 TypeError::wrap(format!("attempted to move a moved value (expected to be at address {target})"), span)
             )?,
             (&S::Moved(Some(_)), &S::Moved(None)) => Err(
-                TypeError::wrap(format!("attempted to move a mutable reference to a dropped value (expected to be at address {target})"), span)
+                TypeError::wrap(format!("attempted to move a dropped value (expected to be at address {target})"), span)
             )?,
             (&S::Moved(Some(_)), &S::ImmutRef(_)) => Err(
-                TypeError::wrap(format!("attempted to move a mutable reference to an immutably referenced value at address {target}"), span)
+                TypeError::wrap(format!("attempted to move an immutably referenced value at address {target}"), span)
             )?,
             (&S::Moved(Some(_)), &S::MutRef(_)) => Err(
-                TypeError::wrap(format!("attempted to move a mutable reference to a mutably referenced value at address {target}"), span)
+                TypeError::wrap(format!("attempted to move a mutably referenced value at address {target}"), span)
             )?,
             (&S::Moved(Some(_)), &S::Union(ref ss)) => Ok({ss.iter().map(|s| self.validate(s, target, span.clone())).collect::<Result<_, _>>()?;}),
             (&S::Moved(None), &S::Moved(Some(_))) => Err(
                 TypeError::wrap(format!("attempted to drop a moved value (expected to be at address {target})"), span)
             )?,
             (&S::Moved(None), &S::Moved(None)) => Err(
-                TypeError::wrap(format!("attempted to drop a mutable reference to a dropped value (expected to be at address {target})"), span)
+                TypeError::wrap(format!("attempted to drop a dropped value (expected to be at address {target})"), span)
             )?,
             (&S::Moved(None), &S::ImmutRef(_)) => Err(
-                TypeError::wrap(format!("attempted to drop a mutable reference to an immutably referenced value at address {target}"), span)
+                TypeError::wrap(format!("attempted to drop a an immutably referenced value at address {target}"), span)
             )?,
             (&S::Moved(None), &S::MutRef(_)) => Err(
-                TypeError::wrap(format!("attempted to drop a mutable reference to a mutably referenced value at address {target}"), span)
+                TypeError::wrap(format!("attempted to drop a a mutably referenced value at address {target}"), span)
             )?,
             (&S::Moved(None), &S::Union(ref ss)) => Ok({ss.iter().map(|s| self.validate(s, target, span.clone())).collect::<Result<_, _>>()?;}),
             (&S::MutRef(_), &S::Moved(Some(_))) => Err(
@@ -134,7 +134,7 @@ impl S {
             (&S::Union(ref ss), &S::Union(_)) => Ok({ss.iter().map(|s| s.validate(old_s, target, span.clone())).collect::<Result<_, _>>()?;}),
         }
     }
-    fn is_move(&self) -> i8 {
+    pub fn is_move(&self) -> i8 {
         match self {
             S::Moved(Some(_)) => 1,
             S::Union(ss) => {
@@ -147,7 +147,7 @@ impl S {
             _ => -1,
         }
     }
-    fn is_drop(&self) -> i8 {
+    pub fn is_drop(&self) -> i8 {
         match self {
             S::Moved(None) => 1,
             S::Union(ss) => {
@@ -160,7 +160,7 @@ impl S {
             _ => -1,
         }
     }
-    fn is_immut_ref(&self) -> i8 {
+    pub fn is_immut_ref(&self) -> i8 {
         match self {
             S::ImmutRef(_) => 1,
             S::Union(ss) => {
@@ -173,7 +173,7 @@ impl S {
             _ => -1,
         }
     }
-    fn is_mut_ref(&self) -> i8 {
+    pub fn is_mut_ref(&self) -> i8 {
         match self {
             S::MutRef(_) => 1,
             S::Union(ss) => {
@@ -271,7 +271,6 @@ impl S {
             _ => false,
         }
     }
-
     pub fn join(s1: Self, s2: Self) -> Result<Self, String> {
         match (s1.clone(), s2.clone()) {
             (S::None, _) => Ok(s2),

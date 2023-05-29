@@ -167,15 +167,15 @@ impl Eta {
                         self.wipe(ell);
                     } else {
                         Err(format!(
-                            "You can't use/drop a value that has a reference pointing to it."
+                            "You can't use/drop a value that has a reference pointing to it at {ell}."
                         ))?
                     }
                 }
                 S::MutRef(_) => Err(format!(
-                    "You can't use/drop a value that has a mutable reference pointing to it."
+                    "You can't use/drop a value that has a mutable reference pointing to it at {ell}."
                 ))?,
                 S::ImmutRef(_) => Err(format!(
-                    "You can't use/drop a value that has an immutable reference pointing to it."
+                    "You can't use/drop a value that has an immutable reference pointing to it. at {ell}"
                 ))?,
                 S::Moved(_) => Err(format!(
                     "You can't use/drop a moved value. It's already dropped."
@@ -286,8 +286,6 @@ impl Eta {
         Ok(Eta { loans })
     }
     fn diagnostics(&self, mu: &Mu, gamma: &Gamma) -> String {
-        println!("LOANS = {:?}", self.loans);
-
         let value_info: &mut Vec<String> = &mut vec![];
         let remaining_indents = &mut Vec::new();
         for (ell, loan) in self.loans.iter() {
@@ -330,8 +328,11 @@ impl Eta {
                 }
             }
         }
-
-        format!("\tthe values at addresses...\n{}", value_info.join("\n"))
+        if value_info.len() > 0 {
+            format!("\tthe values at addresses...\n{}", value_info.join("\n"))
+        } else {
+            format!("")
+        }
     }
 }
 
@@ -401,7 +402,6 @@ pub fn branch_choice() -> bool {
         let mut s = String::new();
         std::io::stdin().read_line(&mut s).unwrap();
         s = s.to_lowercase();
-        println!("s={s}, {}", s.len());
         if s.trim() == "true" {
             break true;
         } else if s.trim() == "false" {
@@ -819,11 +819,50 @@ pub fn type_expr(
             let (tlhs, ell) = type_lhs((lhs, lhs_span.clone()), ctx, eta, mu)?;
             match tlhs.extract_type() {
                 Type::Ref(_, boxed_tau) => {
-                    if eta.loans.values().any(|s| s.contains(&(true, ell))) {
-                        Err(TypeError::wrap(format!(
-                            "cannot borrow `{}` as immutable because it is also borrowed as mutable",
-                            tlhs.extract_lhs().to_string()
-                        ), span))?
+                    let ells = match *boxed_tau.clone() {
+                        Type::Tuple(taus) => iter::once(ell)
+                            .chain(
+                                taus.iter()
+                                    .enumerate()
+                                    .map(|(i, _stast)| ell + (i as u64) + 1),
+                            )
+                            .collect(),
+                        _ => vec![ell],
+                    };
+                    for (i, ell) in ells.iter().enumerate() {
+                        let par = if i == 0 { "" } else { "partially " };
+                        match eta.get(&ell) {
+                            Some(s) => {
+                                if s.is_mut_ref() > -1 {
+                                    Err(TypeError::wrap(format!(
+                                    "cannot borrow `{}` as immutable because it is {}borrowed as mutable",
+                                    tlhs.extract_lhs().to_string(),
+                                    par
+                                ), span.clone()))
+                                } else if s.is_move() > -1 {
+                                    Err(TypeError::wrap(
+                                        format!(
+                                            "cannot borrow `{}` as immutable because it is {}moved",
+                                            tlhs.extract_lhs().to_string(),
+                                            par
+                                        ),
+                                        span.clone(),
+                                    ))
+                                } else if s.is_drop() > -1 {
+                                    Err(TypeError::wrap(
+                                        format!(
+                                            "cannot borrow `{}` as immutable because it is {}dropped",
+                                            tlhs.extract_lhs().to_string(),
+                                            par
+                                        ),
+                                        span.clone(),
+                                    ))
+                                } else {
+                                    Ok(())
+                                }
+                            }
+                            _ => Ok(()),
+                        }?
                     }
 
                     let t = Type::Ref(false, boxed_tau);
@@ -860,9 +899,61 @@ pub fn type_expr(
                                 "cannot borrow `{}` as mutable more than once at a time",
                                 tlhs.extract_lhs().to_string()
                             ),
-                            span,
+                            span.clone(),
                         ))?
                     };
+
+                    let ells = match *boxed_tau.clone() {
+                        Type::Tuple(taus) => iter::once(ell)
+                            .chain(
+                                taus.iter()
+                                    .enumerate()
+                                    .map(|(i, _stast)| ell + (i as u64) + 1),
+                            )
+                            .collect(),
+                        _ => vec![ell],
+                    };
+                    for (i, ell) in ells.iter().enumerate() {
+                        let par = if i == 0 { "" } else { "partially " };
+                        match eta.get(&ell) {
+                            Some(s) => {
+                                if s.is_immut_ref() > -1 {
+                                    Err(TypeError::wrap(format!(
+                                        "cannot borrow `{}` as mutable because it is {}immutably borrowed",
+                                        tlhs.extract_lhs().to_string(),
+                                        par
+                                    ), span.clone()))
+                                } else if s.is_mut_ref() > -1 {
+                                    Err(TypeError::wrap(format!(
+                                    "cannot borrow `{}` as mutable because it is {}mutably borrowed",
+                                    tlhs.extract_lhs().to_string(),
+                                    par
+                                ), span.clone()))
+                                } else if s.is_move() > -1 {
+                                    Err(TypeError::wrap(
+                                        format!(
+                                            "cannot borrow `{}` as mutable because it is {}moved",
+                                            tlhs.extract_lhs().to_string(),
+                                            par
+                                        ),
+                                        span.clone(),
+                                    ))
+                                } else if s.is_drop() > -1 {
+                                    Err(TypeError::wrap(
+                                        format!(
+                                            "cannot borrow `{}` as mutable because it is {}dropped",
+                                            tlhs.extract_lhs().to_string(),
+                                            par
+                                        ),
+                                        span.clone(),
+                                    ))
+                                } else {
+                                    Ok(())
+                                }
+                            }
+                            _ => Ok(()),
+                        }?
+                    }
 
                     let t = Type::Ref(true, boxed_tau);
                     let s = S::MutRef(ell);
@@ -913,6 +1004,7 @@ pub fn type_expr(
             let te2 = type_expr(file, *then.clone(), ctx, eta, mu, display)?;
             let s2 = te2.extract_s();
             ctx.pop_level(mu);
+            TypeError::result_wrap(eta.drop(&ell, &te1.extract_type()), span)?;
             let t = te2.extract_type();
             Ok(STExpr::Let {
                 name,
@@ -960,6 +1052,7 @@ pub fn type_expr(
             let te2 = type_expr(file, *then.clone(), ctx, eta, mu, display)?;
             let s2 = te2.extract_s();
             ctx.pop_level(mu);
+            TypeError::result_wrap(eta.drop(&ell, &te1.extract_type()), span)?;
             let t = te2.extract_type();
             Ok(STExpr::MutLet {
                 name,

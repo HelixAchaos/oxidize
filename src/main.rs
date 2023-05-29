@@ -1,4 +1,4 @@
-use crate::{typechecker::{Eta, File, Gamma, Mu}, lexer::Token};
+use crate::typechecker::{Eta, File, Gamma, Mu};
 use chumsky::Parser;
 use std::collections::VecDeque;
 
