@@ -194,7 +194,7 @@ impl S {
                 Some(Type::Tuple(taus)) => {
                     let ss = (1..=taus.len())
                         .map(|l| eta.get(&(ell + (l as u64))).unwrap())
-                        .collect::<Vec<S>>();
+                        .collect::<Vec<&S>>();
 
                     let errs = &mut vec![];
                     if ss.iter().all(|s| s.is_move() == 1) {

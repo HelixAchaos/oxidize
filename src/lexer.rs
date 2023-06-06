@@ -4,7 +4,7 @@ use crate::ast::Span;
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Token {
-    Num(String),
+    Nat(u64),
     Op(String),
     Var(String),
     Let,
@@ -15,7 +15,7 @@ pub enum Token {
     Then,
     Else,
     True,
-    False
+    False,
 }
 
 impl Token {
@@ -65,7 +65,7 @@ impl ParseError {
 }
 
 pub fn lex() -> impl Parser<char, Vec<(Token, Span)>, Error = Simple<char>> + Clone {
-    let integer = text::int(10).map(Token::Num);
+    let integer = text::int(10).map(|n: String| Token::Nat(n.parse().unwrap()));
 
     // let newline = just("\n").or(just("\r\n")).to(Token::Eol);
 

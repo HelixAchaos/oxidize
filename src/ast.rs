@@ -65,8 +65,8 @@ impl TLhs {
     pub fn to_string(&self) -> String {
         match self {
             TLhs::Var(_, v) => v.clone(),
-            TLhs::DeRef(_, tlhs ) => format!("*{}", tlhs.0.to_string()),
-            TLhs::Index(_, tlhs, i) => format!("{}.{i}", tlhs.0.to_string())
+            TLhs::DeRef(_, tlhs) => format!("*{}", tlhs.0.to_string()),
+            TLhs::Index(_, tlhs, i) => format!("{}.{i}", tlhs.0.to_string()),
         }
     }
 }

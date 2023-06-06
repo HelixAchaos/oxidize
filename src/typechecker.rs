@@ -41,21 +41,6 @@ impl Mu {
             .map(|(var, ell)| (ell, var))
             .collect::<Vec<_>>();
 
-        /*
-
-        Memory Map (Mu):
-            a -> 0
-                 a.0 -> 1
-                 a.1 -> 2
-                 a.2 -> 3
-            b -> 3
-                 b.0 -> 4
-                 b.1 -> 5
-                 b.2 -> 6
-            z -> 6
-
-                */
-
         addrs.sort();
         addrs
             .into_iter()
@@ -88,45 +73,66 @@ impl Mu {
 
 #[derive(Debug, Clone)]
 pub struct Eta {
-    pub loans: BTreeMap<Address, S>,
+    pub loans: Vec<BTreeMap<Address, S>>,
 }
 
 impl Eta {
     pub fn new() -> Eta {
         Eta {
-            loans: BTreeMap::new(),
+            loans: vec![BTreeMap::new()],
         }
     }
 
-    pub fn get(&self, ell: &Address) -> Option<S> {
-        self.loans.get(ell).cloned()
+    pub fn get(&self, ell: &Address) -> Option<&S> {
+        self.loans.last().unwrap().get(ell)
     }
 
     fn insert(&mut self, ell: Address, ss: Vec<Spanned<S>>) -> Result<(), TypeError> {
         for (offset, (s, span)) in ss.into_iter().enumerate() {
             match s {
                 S::None => {
-                    self.loans.insert(ell + (offset as u64), s);
+                    let pos = ell + (offset as u64);
+                    self.wipe(&pos);
+                    self.loans
+                        .last_mut()
+                        .unwrap()
+                        .insert(pos, s);
                 }
                 S::Moved(Some(l)) => {
-                    self.loans.insert(l + (offset as u64), S::Moved(Some(ell)));
+                    let pos = l + (offset as u64);
+                    self.wipe(&pos);
+                    self.loans
+                        .last_mut()
+                        .unwrap()
+                        .insert(pos, S::Moved(Some(ell)));
                 }
                 S::Moved(None) => {
-                    self.loans.insert(ell, S::Moved(None));
+                    let pos = ell;
+                    self.wipe(&pos);
+                    self.loans.last_mut().unwrap().insert(pos, S::Moved(None));
                 }
                 S::MutRef(target) => {
-                    if let Some(old_s) = self.loans.get(&(target + (offset as u64))) {
+                    if let Some(old_s) = self.get(&(target + (offset as u64))) {
                         s.validate(old_s, target, span)?;
                     }
-                    self.loans.insert(target + (offset as u64), S::MutRef(ell));
+                    let pos = target + (offset as u64);
+                    self.wipe(&pos);
+                    self.loans
+                        .last_mut()
+                        .unwrap()
+                        .insert(pos, S::MutRef(ell));
                 }
                 S::ImmutRef(ref targets) => {
                     for target in targets {
-                        if let Some(old_s) = self.loans.get(&(target + (offset as u64))) {
+                        if let Some(old_s) = self.get(&(target + (offset as u64))) {
                             s.validate(old_s, target.to_owned(), span.clone())?;
                         }
+                        let pos = target + (offset as u64);
+                        self.wipe(&pos);
                         self.loans
-                            .insert(target + (offset as u64), S::ImmutRef(HashSet::from([ell])));
+                            .last_mut()
+                            .unwrap()
+                            .insert(pos, S::ImmutRef(HashSet::from([ell])));
                     }
                 }
                 S::Union(onions) => {
@@ -134,7 +140,7 @@ impl Eta {
                         self.insert(ell, vec![(onion, span.clone())])?;
                     }
                 }
-            };
+            }
         }
         Ok(())
     }
@@ -144,9 +150,9 @@ impl Eta {
     }
 
     fn wipe(&mut self, ell: &Address) {
-        for (k, s) in self.loans.iter() {
+        for (k, s) in self.loans.last().unwrap().clone().iter() {
             let t = s.remove(ell);
-            self.loans.insert(*k, t);
+            self.loans.last_mut().unwrap().insert(*k, t);
             break;
         }
     }
@@ -223,10 +229,13 @@ impl Eta {
             _ => {
                 if let Some(new_home) = new_home {
                     for l in new_home {
-                        self.loans.insert(ell, S::Moved(Some(l)));
+                        self.loans
+                            .last_mut()
+                            .unwrap()
+                            .insert(ell, S::Moved(Some(l)));
                     }
                 } else {
-                    self.loans.insert(ell, S::Moved(None));
+                    self.loans.last_mut().unwrap().insert(ell, S::Moved(None));
                 }
             }
         }
@@ -256,19 +265,22 @@ impl Eta {
     }
 
     fn unify(eta1: &Eta, eta2: &Eta) -> Result<Eta, String> {
-        let keys = eta1
-            .loans
+        let (eta1_top_loans, loans) = eta1.loans.split_last().unwrap();
+
+        assert!(loans == eta2.loans.split_last().unwrap().1, "Unification only cares about the top of the loans-stack. Thus, the everything else besides the tails should agree.");
+
+        let top_keys = eta1_top_loans
             .keys()
-            .chain(eta2.loans.keys())
+            .chain(eta2.loans.last().unwrap().keys())
             .collect::<HashSet<&Address>>();
-        let loans = keys
+        let top_loans = top_keys
             .into_iter()
             .map(|k| {
-                let v1 = match eta1.loans.get(k) {
+                let v1 = match eta1_top_loans.get(k) {
                     Some(v1) => v1.to_owned(),
                     None => S::None,
                 };
-                let v2 = match eta2.loans.get(k) {
+                let v2 = match eta2.loans.last().unwrap().get(k) {
                     Some(v2) => v2.to_owned(),
                     None => S::None,
                 };
@@ -278,12 +290,19 @@ impl Eta {
                 }
             })
             .collect::<Result<BTreeMap<Address, S>, String>>()?;
+
+        let loans: Vec<BTreeMap<u64, S>> = loans
+            .into_iter()
+            .map(|l| l.clone())
+            .chain([top_loans].into_iter())
+            .collect();
+
         Ok(Eta { loans })
     }
     fn diagnostics(&self, mu: &Mu, gamma: &Gamma) -> String {
         let value_info: &mut Vec<String> = &mut vec![];
         let remaining_indents = &mut Vec::new();
-        for (ell, loan) in self.loans.iter() {
+        for (ell, loan) in self.loans.last().unwrap().iter() {
             if let Some(name) = mu
                 .iter()
                 .map(|(k, v)| (v, k))
@@ -328,6 +347,13 @@ impl Eta {
         } else {
             format!("")
         }
+    }
+    fn push_level(&mut self) {
+        // self.loans.push(BTreeMap::new())
+        self.loans.push(self.loans.last().unwrap().clone())
+    }
+    fn pop_level(&mut self) {
+        self.loans.pop().unwrap();
     }
 }
 
@@ -476,11 +502,12 @@ pub fn type_lhs(
             ))
         }
         ELhs::DeRef(rec_lhs) => {
-            let (tlhs, ell) = type_lhs(*rec_lhs.clone(), ctx, eta, mu)?;
+            let rec_lhs_span = rec_lhs.1.clone();
+            let (tlhs, ell) = type_lhs(*rec_lhs, ctx, eta, mu)?;
             match tlhs.extract_type() {
                 Type::Ref(_, t) => match *t {
                     Type::Ref(m, tau) => Ok((
-                        TLhs::DeRef(Type::Ref(m, tau), Box::new((tlhs, rec_lhs.1))),
+                        TLhs::DeRef(Type::Ref(m, tau), Box::new((tlhs, rec_lhs_span))),
                         ell,
                     )),
                     _ => Err(TypeError::wrap(
@@ -825,9 +852,9 @@ pub fn type_expr(
                         _ => vec![ell],
                     };
 
-                    for (i, ell) in ells.iter().enumerate() {
+                    for (i, ref ell) in ells.iter().enumerate() {
                         let par = if i == 0 { "" } else { "partially " };
-                        match eta.get(&ell) {
+                        match eta.get(ell) {
                             Some(s) => {
                                 if s.is_mut_ref() > -1 {
                                     Err(TypeError::wrap(format!(
@@ -894,7 +921,7 @@ pub fn type_expr(
                     };
                     for (i, ell) in ells.iter().enumerate() {
                         let par = if i == 0 { "" } else { "partially " };
-                        match eta.get(&ell) {
+                        match eta.get(ell) {
                             Some(s) => {
                                 if s.is_immut_ref() > -1 {
                                     Err(TypeError::wrap(format!(
@@ -946,6 +973,7 @@ pub fn type_expr(
             let s1: S = te1.extract_s();
             let span1 = rhs.1;
 
+            eta.push_level();
             ctx.push_level();
             ctx.assign(name.clone(), (false, te1.extract_type()));
 
@@ -979,6 +1007,7 @@ pub fn type_expr(
 
             let te2 = type_expr(file, *then.clone(), ctx, eta, mu, display)?;
             let s2 = te2.extract_s();
+            eta.pop_level();
             ctx.pop_level(mu);
             TypeError::result_wrap(eta.drop(&ell, &te1.extract_type()), span)?;
             let t = te2.extract_type();
@@ -994,6 +1023,7 @@ pub fn type_expr(
             let s1 = te1.extract_s();
             let span1 = rhs.1;
 
+            eta.push_level();
             ctx.push_level();
             ctx.assign(name.clone(), (true, te1.extract_type()));
 
@@ -1027,6 +1057,7 @@ pub fn type_expr(
 
             let te2 = type_expr(file, *then.clone(), ctx, eta, mu, display)?;
             let s2 = te2.extract_s();
+            eta.pop_level();
             ctx.pop_level(mu);
             TypeError::result_wrap(eta.drop(&ell, &te1.extract_type()), span)?;
             let t = te2.extract_type();

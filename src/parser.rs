@@ -44,7 +44,10 @@ fn macroparse_operator_unary_prefix_het<I, O>(
     }
 
     let (inner, inner_span) = parse_inside(tokens)?;
-    Ok((ast_uop((inner, inner_span.clone())), span_start..inner_span.end))
+    Ok((
+        ast_uop((inner, inner_span.clone())),
+        span_start..inner_span.end,
+    ))
 }
 
 fn macroparse_operator_unary_prefix_hom<T>(
@@ -160,9 +163,9 @@ fn parse_lhs_index(tokens: &mut VecDeque<Spanned<Token>>) -> Result<Spanned<ELhs
         let (_, dot_span) = consume(tokens)?;
         let (index, index_span) = consume(tokens)?;
         match index {
-            Token::Num(n) => {
+            Token::Nat(n) => {
                 let span = (spanned_lhs.1.start)..(index_span.end);
-                spanned_lhs = (ELhs::Index(Box::new(spanned_lhs), n.parse().unwrap()), span)
+                spanned_lhs = (ELhs::Index(Box::new(spanned_lhs), n), span)
             }
             _ => Err(
                 ParseError {
@@ -188,7 +191,7 @@ fn parse_expr_val(tokens: &mut VecDeque<Spanned<Token>>) -> Result<Spanned<EExpr
 
     match val {
         Token::Unit => Ok((EExpr::Unit, val_span)),
-        Token::Num(n) => Ok((EExpr::Num(n.parse().unwrap()), val_span)),
+        Token::Nat(n) => Ok((EExpr::Num(n as i64), val_span)),
         Token::True => Ok((EExpr::Bool(true), val_span)),
         Token::False => Ok((EExpr::Bool(false), val_span)),
         _ => Err(ParseError {
@@ -414,7 +417,10 @@ fn parse_expr_assign(tokens: &mut VecDeque<Spanned<Token>>) -> Result<Spanned<EE
         .into_iter()
         .rfold(spanned_e, |acc, (lhs, lhs_span)| {
             let span = (lhs_span.start)..(acc.1.end);
-            (EExpr::Assign((lhs.to_owned(), lhs_span.to_owned()), Box::new(acc)), span)
+            (
+                EExpr::Assign((lhs.to_owned(), lhs_span.to_owned()), Box::new(acc)),
+                span,
+            )
         }))
 }
 
