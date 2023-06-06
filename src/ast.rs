@@ -1,4 +1,4 @@
-use crate::types::{Type, S};
+use crate::types::Type;
 
 pub type Span = std::ops::Range<usize>;
 pub type Spanned<T> = (T, Span);
@@ -52,8 +52,6 @@ pub enum EExpr {
     },
 }
 
-type SType = (Type, S);
-
 #[derive(Debug, Clone)]
 pub enum TLhs {
     Var(Type, String),
@@ -90,52 +88,46 @@ impl TLhs {
 }
 
 #[derive(Debug, Clone)]
-pub enum STExpr {
-    Unit(SType),
-    Num(SType, i64),
-    Bool(SType, bool),
-    Lvalue(SType, Spanned<TLhs>),
-    Ref(SType, Spanned<TLhs>),
-    MutRef(SType, Spanned<TLhs>),
-    Neg(SType, Box<Spanned<Self>>),
-    Gt(SType, Box<Spanned<Self>>, Box<Spanned<Self>>),
-    Lt(SType, Box<Spanned<Self>>, Box<Spanned<Self>>),
-    Add(SType, Box<Spanned<Self>>, Box<Spanned<Self>>),
-    Sub(SType, Box<Spanned<Self>>, Box<Spanned<Self>>),
-    Mul(SType, Box<Spanned<Self>>, Box<Spanned<Self>>),
-    Div(SType, Box<Spanned<Self>>, Box<Spanned<Self>>),
+pub enum TExpr {
+    Unit(Type),
+    Num(Type, i64),
+    Bool(Type, bool),
+    Lvalue(Type, Spanned<TLhs>),
+    Ref(Type, Spanned<TLhs>),
+    MutRef(Type, Spanned<TLhs>),
+    Neg(Type, Box<Spanned<Self>>),
+    Gt(Type, Box<Spanned<Self>>, Box<Spanned<Self>>),
+    Lt(Type, Box<Spanned<Self>>, Box<Spanned<Self>>),
+    Add(Type, Box<Spanned<Self>>, Box<Spanned<Self>>),
+    Sub(Type, Box<Spanned<Self>>, Box<Spanned<Self>>),
+    Mul(Type, Box<Spanned<Self>>, Box<Spanned<Self>>),
+    Div(Type, Box<Spanned<Self>>, Box<Spanned<Self>>),
     Cond(
-        SType,
+        Type,
         Box<Spanned<Self>>,
         Box<Spanned<Self>>,
         Box<Spanned<Self>>,
     ),
-    Tuple(SType, Vec<Spanned<Self>>),
-    Assign(SType, Spanned<TLhs>, Box<Spanned<Self>>),
-    Seq(SType, Box<Spanned<Self>>, Box<Spanned<Self>>),
+    Tuple(Type, Vec<Spanned<Self>>),
+    Assign(Type, Spanned<TLhs>, Box<Spanned<Self>>),
+    Seq(Type, Box<Spanned<Self>>, Box<Spanned<Self>>),
     Let {
         name: String,
         rhs: Box<Spanned<Self>>,
         then: Box<Spanned<Self>>,
-        t: SType,
+        t: Type,
     },
     MutLet {
         name: String,
         rhs: Box<Spanned<Self>>,
         then: Box<Spanned<Self>>,
-        t: SType,
+        t: Type,
     },
 }
 
-impl STExpr {
+impl TExpr {
     pub fn extract_type(&self) -> Type {
-        self.extract_stype().0
-    }
-    pub fn extract_s(&self) -> S {
-        self.extract_stype().1
-    }
-    pub fn extract_stype(&self) -> SType {
-        use STExpr::*;
+        use TExpr::*;
         match self {
             Unit(t) => t,
             Num(t, _) => t,

@@ -81,12 +81,22 @@ impl S {
         match (s1.clone(), s2.clone()) {
             (S::None, _) => Ok(s2),
             (_, S::None) => Ok(s1),
-            (S::Union(ss1), S::Union(ss2)) => {
-                Ok(S::Union([ss1, ss2].concat()))
-            }
+            (S::Union(ss1), S::Union(ss2)) => Ok(S::Union([ss1, ss2].concat())),
             (S::Union(ss), _) => Ok(S::Union([ss, vec![s2]].concat())),
             (_, S::Union(ss)) => Ok(S::Union([ss, vec![s1]].concat())),
             _ => Ok(S::Union(vec![s1, s2])),
+        }
+    }
+
+    pub fn extract_referred_addresses(&self) -> Vec<Address> {
+        match self {
+            S::Union(v) => v
+                .into_iter()
+                .map(S::extract_referred_addresses)
+                .collect::<Vec<Vec<Address>>>()
+                .concat(),
+            S::MutRef(addr) | S::ImmutRef(addr) => vec![addr.to_owned()],
+            S::Moved(_) | S::None => vec![],
         }
     }
 }

@@ -3,12 +3,23 @@ use std::fs;
 use std::iter::{self};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use crate::ast::{EExpr, ELhs, STExpr, Span, Spanned, TLhs};
+use crate::ast::{EExpr, ELhs, Span, Spanned, TExpr, TLhs};
 use crate::lexer;
 use crate::types::{Address, BorrowState, Type, TypeError, Var, S};
 
 type ColoredType = (bool, Type);
 type TypeContext = HashMap<Var, ColoredType>;
+
+static COUNTER: AtomicUsize = AtomicUsize::new(0);
+
+fn generate_address() -> Address {
+    let result = COUNTER.fetch_add(1, Ordering::Relaxed);
+    result as u64
+}
+
+fn reset_counter(n: usize) {
+    COUNTER.store(n, Ordering::Relaxed);
+}
 
 #[derive(Debug, Clone)]
 pub struct Mu {
@@ -20,6 +31,9 @@ impl Mu {
         Mu {
             location_map: HashMap::new(),
         }
+    }
+    fn max_addr(&self) -> Address {
+        self.location_map.values().max().unwrap().to_owned()
     }
     pub fn iter(&self) -> std::collections::hash_map::Iter<'_, String, u64> {
         self.location_map.iter()
@@ -71,20 +85,20 @@ impl Mu {
 
 #[derive(Debug, Clone)]
 pub struct Eta {
-    pub loans: Vec<BTreeMap<Address, BorrowState>>,
+    pub loans: BTreeMap<Address, BorrowState>,
     unified: bool,
 }
 
 impl Eta {
     pub fn new() -> Eta {
         Eta {
-            loans: vec![BTreeMap::new()],
+            loans: BTreeMap::new(),
             unified: false,
         }
     }
 
     pub fn get(&self, ell: &Address) -> Option<&BorrowState> {
-        self.loans.last().unwrap().get(ell)
+        self.loans.get(ell)
     }
 
     fn insert(&mut self, ell: Address, ss: Vec<Spanned<S>>) -> Result<(), TypeError> {
@@ -93,18 +107,12 @@ impl Eta {
                 S::None => {
                     let pos = ell + (offset as u64);
                     self.wipe(&pos);
-                    self.loans
-                        .last_mut()
-                        .unwrap()
-                        .insert(pos, BorrowState::None);
+                    self.loans.insert(pos, BorrowState::None);
                 }
                 S::Moved(l) => {
                     let pos = l + (offset as u64);
                     self.wipe(&pos);
-                    self.loans
-                        .last_mut()
-                        .unwrap()
-                        .insert(pos, BorrowState::Moved(Some(ell)));
+                    self.loans.insert(pos, BorrowState::Moved(Some(ell)));
                 }
                 S::MutRef(target) => {
                     if let Some(old_s) = self.get(&(target + (offset as u64))) {
@@ -112,10 +120,7 @@ impl Eta {
                     }
                     let pos = target + (offset as u64);
                     self.wipe(&pos);
-                    self.loans
-                        .last_mut()
-                        .unwrap()
-                        .insert(pos, BorrowState::MutRef(ell));
+                    self.loans.insert(pos, BorrowState::MutRef(ell));
                 }
                 S::ImmutRef(target) => {
                     if let Some(old_s) = self.get(&(target + (offset as u64))) {
@@ -128,8 +133,6 @@ impl Eta {
                     let pos = target + (offset as u64);
                     self.wipe(&pos);
                     self.loans
-                        .last_mut()
-                        .unwrap()
                         .insert(pos, BorrowState::ImmutRef(HashSet::from([ell])));
                 }
                 S::Union(onions) => {
@@ -148,9 +151,9 @@ impl Eta {
     }
 
     fn wipe(&mut self, ell: &Address) {
-        for (k, s) in self.loans.last().unwrap().clone().iter() {
+        for (k, s) in self.loans.iter() {
             let t = s.remove(ell);
-            self.loans.last_mut().unwrap().insert(*k, t);
+            self.loans.insert(*k, t);
             break;
         }
     }
@@ -227,16 +230,10 @@ impl Eta {
             _ => {
                 if let Some(new_home) = new_home {
                     for l in new_home {
-                        self.loans
-                            .last_mut()
-                            .unwrap()
-                            .insert(ell, BorrowState::Moved(Some(l)));
+                        self.loans.insert(ell, BorrowState::Moved(Some(l)));
                     }
                 } else {
-                    self.loans
-                        .last_mut()
-                        .unwrap()
-                        .insert(ell, BorrowState::Moved(None));
+                    self.loans.insert(ell, BorrowState::Moved(None));
                 }
             }
         }
@@ -266,22 +263,19 @@ impl Eta {
     }
 
     fn unify(eta1: &Eta, eta2: &Eta) -> Result<Eta, String> {
-        let (eta1_top_loans, loans) = eta1.loans.split_last().unwrap();
-
-        assert!(loans == eta2.loans.split_last().unwrap().1, "Unification only cares about the top of the loans-stack. Thus, the everything else besides the tails should agree.");
-
-        let top_keys = eta1_top_loans
+        let top_keys = eta1
+            .loans
             .keys()
-            .chain(eta2.loans.last().unwrap().keys())
+            .chain(eta2.loans.keys())
             .collect::<HashSet<&Address>>();
-        let top_loans = top_keys
+        let loans = top_keys
             .into_iter()
             .map(|k| {
-                let v1 = match eta1_top_loans.get(k) {
+                let v1 = match eta1.loans.get(k) {
                     Some(v1) => v1.to_owned(),
                     None => BorrowState::None,
                 };
-                let v2 = match eta2.loans.last().unwrap().get(k) {
+                let v2 = match eta2.loans.get(k) {
                     Some(v2) => v2.to_owned(),
                     None => BorrowState::None,
                 };
@@ -292,12 +286,6 @@ impl Eta {
             })
             .collect::<Result<BTreeMap<Address, BorrowState>, String>>()?;
 
-        let loans: Vec<BTreeMap<u64, BorrowState>> = loans
-            .into_iter()
-            .map(|l| l.clone())
-            .chain([top_loans].into_iter())
-            .collect();
-
         Ok(Eta {
             loans,
             unified: true,
@@ -306,7 +294,7 @@ impl Eta {
     fn diagnostics(&self, mu: &Mu, gamma: &Gamma) -> String {
         let value_info: &mut Vec<String> = &mut vec![];
         let remaining_indents = &mut Vec::new();
-        for (ell, loan) in self.loans.last().unwrap().iter() {
+        for (ell, loan) in self.loans.iter() {
             if let Some(name) = mu
                 .iter()
                 .map(|(k, v)| (v, k))
@@ -352,13 +340,6 @@ impl Eta {
             format!("")
         }
     }
-    fn push_level(&mut self) {
-        // self.loans.push(BTreeMap::new())
-        self.loans.push(self.loans.last().unwrap().clone())
-    }
-    fn pop_level(&mut self) {
-        self.loans.pop().unwrap();
-    }
 }
 
 #[derive(Debug, Clone)]
@@ -383,10 +364,12 @@ impl Gamma {
     fn push_level(&mut self) {
         self.scopes.push(HashMap::new())
     }
-    fn pop_level(&mut self, mu: &mut Mu) {
+    fn pop_level(&mut self, mu: &mut Mu, eta: &mut Eta) {
         let scope = self.scopes.pop().unwrap();
         for var in scope.keys() {
-            mu.remove(var);
+            if let Some(ell) = mu.remove(var) {
+                eta.wipe(&ell)
+            }
         }
     }
     fn diagnostics(&self) -> String {
@@ -409,12 +392,6 @@ impl Gamma {
             .collect::<Vec<String>>()
             .join("\n")
     }
-}
-
-fn generate_address() -> Address {
-    static COUNTER: AtomicUsize = AtomicUsize::new(0);
-    let result = COUNTER.fetch_add(1, Ordering::Relaxed);
-    result as u64
 }
 
 pub fn pause() {
@@ -561,17 +538,20 @@ pub fn type_expr(
     eta: &mut Eta,
     mu: &mut Mu,
     display: bool,
-) -> Result<STExpr, TypeError> {
+) -> Result<(TExpr, Vec<Spanned<S>>), TypeError> {
     let (expr, span) = spanned;
     match expr {
-        EExpr::Unit => Ok(STExpr::Unit((Type::Unit, S::None))),
-        EExpr::Num(x) => Ok(STExpr::Num((Type::Int, S::None), x)),
-        EExpr::Bool(b) => Ok(STExpr::Bool((Type::Bool, S::None), b)),
+        EExpr::Unit => Ok((TExpr::Unit(Type::Unit), vec![(S::None, span)])),
+        EExpr::Num(x) => Ok((TExpr::Num(Type::Int, x), vec![(S::None, span)])),
+        EExpr::Bool(b) => Ok((TExpr::Bool(Type::Bool, b), vec![(S::None, span)])),
         EExpr::Neg(a) => {
             let span_1 = a.1.clone();
-            let a = type_expr(file, *a, ctx, eta, mu, display)?;
+            let (a, _) = type_expr(file, *a, ctx, eta, mu, display)?;
             match a.extract_type() {
-                Type::Int => Ok(STExpr::Neg((Type::Int, S::None), Box::new((a, span_1)))),
+                Type::Int => Ok((
+                    TExpr::Neg(Type::Int, Box::new((a, span_1))),
+                    vec![(S::None, span)],
+                )),
                 _ => Err(TypeError::wrap(
                     format!("You can negate only integers."),
                     span,
@@ -581,13 +561,12 @@ pub fn type_expr(
         EExpr::Gt(a, b) => {
             let span_1 = a.1.clone();
             let span_2 = b.1.clone();
-            let a = type_expr(file, *a, ctx, eta, mu, display)?;
-            let b = type_expr(file, *b, ctx, eta, mu, display)?;
+            let (a, _) = type_expr(file, *a, ctx, eta, mu, display)?;
+            let (b, _) = type_expr(file, *b, ctx, eta, mu, display)?;
             match (a.extract_type(), b.extract_type()) {
-                (Type::Int, Type::Int) => Ok(STExpr::Gt(
-                    (Type::Bool, S::None),
-                    Box::new((a, span_1)),
-                    Box::new((b, span_2)),
+                (Type::Int, Type::Int) => Ok((
+                    TExpr::Gt(Type::Bool, Box::new((a, span_1)), Box::new((b, span_2))),
+                    vec![(S::None, span)],
                 )),
                 _ => Err(TypeError::wrap(
                     format!("You can compare only integers together."),
@@ -598,13 +577,12 @@ pub fn type_expr(
         EExpr::Lt(a, b) => {
             let span_1 = a.1.clone();
             let span_2 = b.1.clone();
-            let a = type_expr(file, *a, ctx, eta, mu, display)?;
-            let b = type_expr(file, *b, ctx, eta, mu, display)?;
+            let (a, _) = type_expr(file, *a, ctx, eta, mu, display)?;
+            let (b, _) = type_expr(file, *b, ctx, eta, mu, display)?;
             match (a.extract_type(), b.extract_type()) {
-                (Type::Int, Type::Int) => Ok(STExpr::Lt(
-                    (Type::Bool, S::None),
-                    Box::new((a, span_1)),
-                    Box::new((b, span_2)),
+                (Type::Int, Type::Int) => Ok((
+                    TExpr::Lt(Type::Bool, Box::new((a, span_1)), Box::new((b, span_2))),
+                    vec![(S::None, span)],
                 )),
                 _ => Err(TypeError::wrap(
                     format!("You can compare only integers together."),
@@ -615,13 +593,12 @@ pub fn type_expr(
         EExpr::Add(a, b) => {
             let span_1 = a.1.clone();
             let span_2 = b.1.clone();
-            let a = type_expr(file, *a, ctx, eta, mu, display)?;
-            let b = type_expr(file, *b, ctx, eta, mu, display)?;
+            let (a, _) = type_expr(file, *a, ctx, eta, mu, display)?;
+            let (b, _) = type_expr(file, *b, ctx, eta, mu, display)?;
             match (a.extract_type(), b.extract_type()) {
-                (Type::Int, Type::Int) => Ok(STExpr::Add(
-                    (Type::Int, S::None),
-                    Box::new((a, span_1)),
-                    Box::new((b, span_2)),
+                (Type::Int, Type::Int) => Ok((
+                    TExpr::Add(Type::Int, Box::new((a, span_1)), Box::new((b, span_2))),
+                    vec![(S::None, span)],
                 )),
                 _ => Err(TypeError::wrap(
                     format!("You can add only integers together."),
@@ -632,13 +609,12 @@ pub fn type_expr(
         EExpr::Sub(a, b) => {
             let span_1 = a.1.clone();
             let span_2 = b.1.clone();
-            let a = type_expr(file, *a, ctx, eta, mu, display)?;
-            let b = type_expr(file, *b, ctx, eta, mu, display)?;
+            let (a, _) = type_expr(file, *a, ctx, eta, mu, display)?;
+            let (b, _) = type_expr(file, *b, ctx, eta, mu, display)?;
             match (a.extract_type(), b.extract_type()) {
-                (Type::Int, Type::Int) => Ok(STExpr::Sub(
-                    (Type::Int, S::None),
-                    Box::new((a, span_1)),
-                    Box::new((b, span_2)),
+                (Type::Int, Type::Int) => Ok((
+                    TExpr::Sub(Type::Int, Box::new((a, span_1)), Box::new((b, span_2))),
+                    vec![(S::None, span)],
                 )),
                 _ => Err(TypeError::wrap(
                     format!("You can subtract only integers together."),
@@ -649,13 +625,12 @@ pub fn type_expr(
         EExpr::Mul(a, b) => {
             let span_1 = a.1.clone();
             let span_2 = b.1.clone();
-            let a = type_expr(file, *a, ctx, eta, mu, display)?;
-            let b = type_expr(file, *b, ctx, eta, mu, display)?;
+            let (a, _) = type_expr(file, *a, ctx, eta, mu, display)?;
+            let (b, _) = type_expr(file, *b, ctx, eta, mu, display)?;
             match (a.extract_type(), b.extract_type()) {
-                (Type::Int, Type::Int) => Ok(STExpr::Mul(
-                    (Type::Int, S::None),
-                    Box::new((a, span_1)),
-                    Box::new((b, span_2)),
+                (Type::Int, Type::Int) => Ok((
+                    TExpr::Mul(Type::Int, Box::new((a, span_1)), Box::new((b, span_2))),
+                    vec![(S::None, span)],
                 )),
                 _ => Err(TypeError::wrap(
                     format!("You can multiply only integers together."),
@@ -666,13 +641,12 @@ pub fn type_expr(
         EExpr::Div(a, b) => {
             let span_1 = a.1.clone();
             let span_2 = b.1.clone();
-            let a = type_expr(file, *a, ctx, eta, mu, display)?;
-            let b = type_expr(file, *b, ctx, eta, mu, display)?;
+            let (a, _) = type_expr(file, *a, ctx, eta, mu, display)?;
+            let (b, _) = type_expr(file, *b, ctx, eta, mu, display)?;
             match (a.extract_type(), b.extract_type()) {
-                (Type::Int, Type::Int) => Ok(STExpr::Div(
-                    (Type::Int, S::None),
-                    Box::new((a, span_1)),
-                    Box::new((b, span_2)),
+                (Type::Int, Type::Int) => Ok((
+                    TExpr::Div(Type::Int, Box::new((a, span_1)), Box::new((b, span_2))),
+                    vec![(S::None, span)],
                 )),
                 _ => Err(TypeError::wrap(
                     format!("You can divide only integers together."),
@@ -685,7 +659,7 @@ pub fn type_expr(
             let span_2 = then_exp.1.clone();
             let span_3 = else_exp.1.clone();
 
-            let cond = type_expr(file, *cond, ctx, eta, mu, display)?;
+            let (cond, _) = type_expr(file, *cond, ctx, eta, mu, display)?;
             if cond.extract_type() != Type::Bool {
                 Err(TypeError::wrap(
                     format!(
@@ -707,8 +681,8 @@ pub fn type_expr(
 
             let mut then_mu = mu.clone();
             let mut then_eta = eta.clone();
-            let then_exp = type_expr(file, *then_exp, ctx, &mut then_eta, &mut then_mu, branch)?;
-            let s_1 = then_exp.extract_s();
+            let (then_exp, s_1) =
+                type_expr(file, *then_exp, ctx, &mut then_eta, &mut then_mu, branch)?;
 
             if branch {
                 cls();
@@ -719,8 +693,8 @@ pub fn type_expr(
 
             let mut else_mu = mu.clone();
             let mut else_eta = eta.clone();
-            let else_exp = type_expr(file, *else_exp, ctx, &mut else_eta, &mut else_mu, !branch)?;
-            let s_2 = else_exp.extract_s();
+            let (else_exp, s_2) =
+                type_expr(file, *else_exp, ctx, &mut else_eta, &mut else_mu, !branch)?;
 
             if branch {
                 cls();
@@ -740,6 +714,10 @@ pub fn type_expr(
                     span.clone(),
                 ))?
             }
+            assert!(
+                s_1.len() == s_2.len(),
+                "If the branches have the same type, the lengths of the Ss must be the same."
+            );
 
             // Gamma doesn't need to be joined bc of scope-lifetimes.
 
@@ -756,15 +734,25 @@ pub fn type_expr(
             file.reveal(span_3.end);
             pause();
 
-            let s = match S::join(s_1, s_2) {
-                Ok(s) => Ok(s),
-                Err(msg) => Err(TypeError { msg, span }),
-            }?;
-            Ok(STExpr::Cond(
-                (then_tau, s),
-                Box::new((cond, span_1)),
-                Box::new((then_exp, span_2)),
-                Box::new((else_exp, span_3)),
+            let s = s_1
+                .into_iter()
+                .zip(s_2.into_iter())
+                .map(|((s1, _), (s2, _))| match S::join(s1, s2) {
+                    Ok(s) => Ok((s, span.clone())),
+                    Err(msg) => Err(TypeError {
+                        msg,
+                        span: span.clone(),
+                    }),
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            Ok((
+                TExpr::Cond(
+                    then_tau,
+                    Box::new((cond, span_1)),
+                    Box::new((then_exp, span_2)),
+                    Box::new((else_exp, span_3)),
+                ),
+                s,
             ))
         }
         EExpr::Tuple(exprs) => {
@@ -778,13 +766,15 @@ pub fn type_expr(
                 )
                 .collect::<Result<Vec<_>, _>>()?;
 
-            let t = Type::Tuple(
-                stexprs
-                    .iter()
-                    .map(|(stexpr, _)| stexpr.extract_type())
-                    .collect(),
-            );
-            Ok(STExpr::Tuple((t, S::None), stexprs))
+            let (texprs, s): (Vec<_>, Vec<_>) = stexprs
+                .into_iter()
+                .map(|((texpr, s), span)| ((texpr, span), s))
+                .unzip();
+
+            let t = Type::Tuple(texprs.iter().map(|(te, _)| te.extract_type()).collect());
+            let s = [vec![(S::None, span)], s.concat()].concat();
+
+            Ok((TExpr::Tuple(t, texprs), s))
         }
         EExpr::Lvalue((lhs, lhs_span)) => {
             let (lhs, ell) = type_lhs((lhs, lhs_span.clone()), ctx, eta, mu)?;
@@ -792,18 +782,18 @@ pub fn type_expr(
 
             match lhs.extract_type() {
                 Type::Ref(_, ref tau) => {
-                    TypeError::result_wrap(eta.may_move(&ell, tau), span)?;
+                    TypeError::result_wrap(eta.may_move(&ell, tau), span.clone())?;
                     eta.mov(ell, None, *tau.clone());
-                    Ok(STExpr::Lvalue(
-                        (*tau.to_owned(), S::Moved(ell)),
-                        (lhs, lhs_span),
+                    Ok((
+                        TExpr::Lvalue(*tau.to_owned(), (lhs, lhs_span)),
+                        vec![(S::Moved(ell), span)],
                     ))
                 }
                 _ => panic!(),
             }
         }
         EExpr::Seq(e1, e2) => {
-            let te1 = type_expr(file, *e1.clone(), ctx, eta, mu, display)?;
+            let (te1, _) = type_expr(file, *e1.clone(), ctx, eta, mu, display)?;
 
             // cls();
             // diagnostics(ctx, eta, mu);
@@ -811,13 +801,15 @@ pub fn type_expr(
             // file.reveal_until(&lexer::Token::Op(";".to_string()));
             // pause();
 
-            let te2 = type_expr(file, *e2.clone(), ctx, eta, mu, display)?;
-            let s2 = te2.extract_s();
+            let (te2, s2) = type_expr(file, *e2.clone(), ctx, eta, mu, display)?;
 
-            Ok(STExpr::Seq(
-                (te2.extract_type(), s2),
-                Box::new((te1, e1.1)),
-                Box::new((te2, e2.1)),
+            Ok((
+                TExpr::Seq(
+                    te2.extract_type(),
+                    Box::new((te1, e1.1)),
+                    Box::new((te2, e2.1)),
+                ),
+                s2,
             ))
         }
         EExpr::Ref((lhs, lhs_span)) => {
@@ -837,43 +829,39 @@ pub fn type_expr(
 
                     for (i, ref ell) in ells.iter().enumerate() {
                         let par = if i == 0 { "" } else { "partially " };
-                        match eta.get(ell) {
-                            Some(s) => {
-                                if s.is_mut_ref() > -1 {
-                                    Err(TypeError::wrap(format!(
+                        let s = eta.get(ell).unwrap();
+                        if s.is_mut_ref() > -1 {
+                            Err(TypeError::wrap(format!(
                                     "cannot borrow `{}` as immutable because it is {}borrowed as mutable",
                                     tlhs.extract_lhs().to_string(),
                                     par
                                 ), span.clone()))
-                                } else if s.is_move() > -1 {
-                                    Err(TypeError::wrap(
-                                        format!(
-                                            "cannot borrow `{}` as immutable because it is {}moved",
-                                            tlhs.extract_lhs().to_string(),
-                                            par
-                                        ),
-                                        span.clone(),
-                                    ))
-                                } else if s.is_drop() > -1 {
-                                    Err(TypeError::wrap(
-                                        format!(
-                                            "cannot borrow `{}` as immutable because it is {}dropped",
-                                            tlhs.extract_lhs().to_string(),
-                                            par
-                                        ),
-                                        span.clone(),
-                                    ))
-                                } else {
-                                    Ok(())
-                                }
-                            }
-                            _ => Ok(()),
+                        } else if s.is_move() > -1 {
+                            Err(TypeError::wrap(
+                                format!(
+                                    "cannot borrow `{}` as immutable because it is {}moved",
+                                    tlhs.extract_lhs().to_string(),
+                                    par
+                                ),
+                                span.clone(),
+                            ))
+                        } else if s.is_drop() > -1 {
+                            Err(TypeError::wrap(
+                                format!(
+                                    "cannot borrow `{}` as immutable because it is {}dropped",
+                                    tlhs.extract_lhs().to_string(),
+                                    par
+                                ),
+                                span.clone(),
+                            ))
+                        } else {
+                            Ok(())
                         }?
                     }
 
                     let t = Type::Ref(false, boxed_tau);
                     let s = S::ImmutRef(ell);
-                    Ok(STExpr::Ref((t, s), (tlhs, lhs_span)))
+                    Ok((TExpr::Ref(t, (tlhs, lhs_span)), vec![(s, span)]))
                 }
                 _ => panic!(),
             }
@@ -946,37 +934,25 @@ pub fn type_expr(
 
                     let t = Type::Ref(true, boxed_tau);
                     let s = S::MutRef(ell);
-                    Ok(STExpr::MutRef((t, s), (tlhs, lhs_span)))
+                    Ok((TExpr::MutRef(t, (tlhs, lhs_span)), vec![(s, span)]))
                 }
                 _ => panic!(),
             }
         }
         EExpr::Let { name, rhs, then } => {
-            let te1 = type_expr(file, *rhs.clone(), ctx, eta, mu, display)?;
-            let s1: S = te1.extract_s();
+            let (te1, ss) = type_expr(file, *rhs.clone(), ctx, eta, mu, display)?;
             let span1 = rhs.1;
 
-            eta.push_level();
             ctx.push_level();
             ctx.assign(name.clone(), (false, te1.extract_type()));
 
             let ell = generate_address();
-            let ss = if let STExpr::Tuple(_, stexprs) = te1.clone() {
-                for _ in 0..stexprs.len() {
+            if let TExpr::Tuple(_, texprs) = te1.clone() {
+                assert!(texprs.len() == ss.len() - 1);
+                for _ in 0..texprs.len() {
                     let _ = generate_address();
                 }
-                iter::once((s1, span1.clone()))
-                    .chain(
-                        stexprs
-                            .into_iter()
-                            .map(|(stexpr, span)| (stexpr.extract_s(), span)),
-                    )
-                    .collect()
-                // stexprs.iter().map(STExpr::extract_s).collect()
-            } else {
-                vec![(s1, span1.clone())]
-            };
-
+            }
             eta.insert(ell, ss)?;
             mu.insert(name.clone(), ell);
 
@@ -988,45 +964,45 @@ pub fn type_expr(
                 pause();
             }
 
-            let te2 = type_expr(file, *then.clone(), ctx, eta, mu, display)?;
-            let s2 = te2.extract_s();
-            eta.pop_level();
-            ctx.pop_level(mu);
-            TypeError::result_wrap(eta.drop(&ell, &te1.extract_type()), span)?;
+            let (te2, s2) = type_expr(file, *then.clone(), ctx, eta, mu, display)?;
+            ctx.pop_level(mu, eta);
+            reset_counter((mu.max_addr() as usize) + 1);
+
+            TypeError::result_wrap(eta.drop(&ell, &te1.extract_type()), span.clone())?;
+
+            for (s, s_span) in s2.iter() {
+                for referred in s.extract_referred_addresses() {
+                    if referred >= ell {
+                        Err(TypeError {msg: format!("Lifetime: A reference at address {referred} (created at {:?}) leaked out.", s_span), span: span.clone()})?
+                    }
+                }
+            }
+
             let t = te2.extract_type();
-            Ok(STExpr::Let {
-                name,
-                rhs: Box::new((te1, span1)),
-                then: Box::new((te2, then.1)),
-                t: (t, s2),
-            })
+            Ok((
+                TExpr::Let {
+                    name,
+                    rhs: Box::new((te1, span1)),
+                    then: Box::new((te2, then.1)),
+                    t,
+                },
+                s2,
+            ))
         }
         EExpr::MutLet { name, rhs, then } => {
-            let te1 = type_expr(file, *rhs.clone(), ctx, eta, mu, display)?;
-            let s1 = te1.extract_s();
+            let (te1, ss) = type_expr(file, *rhs.clone(), ctx, eta, mu, display)?;
             let span1 = rhs.1;
 
-            eta.push_level();
             ctx.push_level();
             ctx.assign(name.clone(), (true, te1.extract_type()));
 
             let ell = generate_address();
-
-            let ss = if let STExpr::Tuple(_, stexprs) = te1.clone() {
-                for _ in 0..stexprs.len() {
+            if let TExpr::Tuple(_, texprs) = te1.clone() {
+                assert!(texprs.len() == ss.len() - 1);
+                for _ in 0..texprs.len() {
                     let _ = generate_address();
                 }
-                iter::once((s1, span1.clone()))
-                    .chain(
-                        stexprs
-                            .into_iter()
-                            .map(|(stexpr, span)| (stexpr.extract_s(), span)),
-                    )
-                    .collect()
-                // stexprs.iter().map(STExpr::extract_s).collect()
-            } else {
-                vec![(s1, span1.clone())]
-            };
+            }
             eta.insert(ell, ss)?;
             mu.insert(name.clone(), ell);
 
@@ -1038,18 +1014,29 @@ pub fn type_expr(
                 pause();
             }
 
-            let te2 = type_expr(file, *then.clone(), ctx, eta, mu, display)?;
-            let s2 = te2.extract_s();
-            eta.pop_level();
-            ctx.pop_level(mu);
-            TypeError::result_wrap(eta.drop(&ell, &te1.extract_type()), span)?;
+            let (te2, s2) = type_expr(file, *then.clone(), ctx, eta, mu, display)?;
+            ctx.pop_level(mu, eta);
+            reset_counter((mu.max_addr() as usize) + 1);
+
+            TypeError::result_wrap(eta.drop(&ell, &te1.extract_type()), span.clone())?;
+            for (s, s_span) in s2.iter() {
+                for referred in s.extract_referred_addresses() {
+                    if referred >= ell {
+                        Err(TypeError {msg: format!("Lifetime: A reference at address {referred} (created at {:?}) leaked out.", s_span), span: span.clone()})?
+                    }
+                }
+            }
+
             let t = te2.extract_type();
-            Ok(STExpr::MutLet {
-                name,
-                rhs: Box::new((te1, span1)),
-                then: Box::new((te2, then.1)),
-                t: (t, s2),
-            })
+            Ok((
+                TExpr::MutLet {
+                    name,
+                    rhs: Box::new((te1, span1)),
+                    then: Box::new((te2, then.1)),
+                    t,
+                },
+                s2,
+            ))
         }
         EExpr::Assign((lhs, lhs_span), e2) => {
             if display {
@@ -1078,35 +1065,22 @@ pub fn type_expr(
                 _ => panic!(),
             }?;
 
-            let te2 = type_expr(file, *e2.clone(), ctx, eta, mu, display)?;
-            let s = te2.extract_s();
+            let (te2, ss) = type_expr(file, *e2.clone(), ctx, eta, mu, display)?;
 
             if tau_lhs == te2.extract_type() {
                 let span = e2.1;
-                let ss = if let STExpr::Tuple(_, stexprs) = te2.clone() {
-                    for _ in 0..stexprs.len() {
-                        let _ = generate_address();
-                    }
-                    iter::once((s, span.clone()))
-                        .chain(
-                            stexprs
-                                .into_iter()
-                                .map(|(stexpr, span)| (stexpr.extract_s(), span)),
-                        )
-                        .collect()
-                    // stexprs.iter().map(STExpr::extract_s).collect()
-                } else {
-                    vec![(s, span.clone())]
-                };
+
+                if let TExpr::Tuple(_, texprs) = te2.clone() {
+                    assert!(texprs.len() == ss.len() - 1);
+                }
 
                 TypeError::result_wrap(eta.drop(&ell, &tau_lhs), span.clone())?;
 
                 eta.insert(ell, ss)?;
 
-                Ok(STExpr::Assign(
-                    (Type::Unit, S::None),
-                    (tlhs, lhs_span),
-                    Box::new((te2, span)),
+                Ok((
+                    TExpr::Assign(Type::Unit, (tlhs, lhs_span), Box::new((te2, span.clone()))),
+                    vec![(S::None, span)],
                 ))
             } else {
                 Err(TypeError::wrap(
