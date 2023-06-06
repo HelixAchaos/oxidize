@@ -69,6 +69,24 @@ impl TLhs {
             TLhs::Index(_, tlhs, i) => format!("{}.{i}", tlhs.0.to_string()),
         }
     }
+    pub fn extract_type(&self) -> Type {
+        use TLhs::*;
+        match self {
+            Var(t, _) => t,
+            DeRef(t, _) => t,
+            Index(t, _, _) => t,
+        }
+        .to_owned()
+    }
+
+    pub fn extract_lhs(&self) -> ELhs {
+        use TLhs::*;
+        match self.to_owned() {
+            Var(_, name) => ELhs::Var(name),
+            DeRef(_, lhs) => ELhs::DeRef(Box::new((lhs.0.extract_lhs(), lhs.1))),
+            Index(_, lhs, i) => ELhs::Index(Box::new((lhs.0.extract_lhs(), lhs.1)), i),
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -107,27 +125,6 @@ pub enum STExpr {
         then: Box<Spanned<Self>>,
         t: SType,
     },
-}
-
-impl TLhs {
-    pub fn extract_type(&self) -> Type {
-        use TLhs::*;
-        match self {
-            Var(t, _) => t,
-            DeRef(t, _) => t,
-            Index(t, _, _) => t,
-        }
-        .to_owned()
-    }
-
-    pub fn extract_lhs(&self) -> ELhs {
-        use TLhs::*;
-        match self.to_owned() {
-            Var(_, name) => ELhs::Var(name),
-            DeRef(_, lhs) => ELhs::DeRef(Box::new((lhs.0.extract_lhs(), lhs.1))),
-            Index(_, lhs, i) => ELhs::Index(Box::new((lhs.0.extract_lhs(), lhs.1)), i),
-        }
-    }
 }
 
 impl STExpr {

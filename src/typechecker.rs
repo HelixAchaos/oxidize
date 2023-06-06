@@ -66,8 +66,6 @@ impl Mu {
             })
             .collect::<Vec<String>>()
             .join("\n")
-
-        // format!("{:?}", self.location_map)
     }
 }
 
@@ -93,10 +91,7 @@ impl Eta {
                 S::None => {
                     let pos = ell + (offset as u64);
                     self.wipe(&pos);
-                    self.loans
-                        .last_mut()
-                        .unwrap()
-                        .insert(pos, s);
+                    self.loans.last_mut().unwrap().insert(pos, s);
                 }
                 S::Moved(Some(l)) => {
                     let pos = l + (offset as u64);
@@ -117,10 +112,7 @@ impl Eta {
                     }
                     let pos = target + (offset as u64);
                     self.wipe(&pos);
-                    self.loans
-                        .last_mut()
-                        .unwrap()
-                        .insert(pos, S::MutRef(ell));
+                    self.loans.last_mut().unwrap().insert(pos, S::MutRef(ell));
                 }
                 S::ImmutRef(ref targets) => {
                     for target in targets {
@@ -487,7 +479,7 @@ pub fn cls() {
 pub fn type_lhs(
     (lhs, span): Spanned<ELhs>,
     ctx: &Gamma,
-    eta: &mut Eta,
+    eta: &Eta,
     mu: &mut Mu,
 ) -> Result<(TLhs, Address), TypeError> {
     match lhs {
