@@ -61,14 +61,14 @@ fn main() -> Result<(), String> {
             // let tast = stast.extract_tast();
             // println!("TAST:\n    {:?}", tast);
             typechecker::cls();
-            typechecker::diagnostics(&gamma, &eta, &mu);
+            typechecker::diagnostics(&gamma, &mut eta, &mu);
             file.reveal(src.len());
             println!("{}", "-".to_string().repeat(80));
             println!("\nType checked! Yipee.");
         }
         Err(e) => {
             typechecker::cls();
-            typechecker::diagnostics(&gamma, &eta, &mu);
+            typechecker::diagnostics(&gamma, &mut eta, &mu);
             file.reveal(e.span.end);
             println!("{}", "-".to_string().repeat(80));
             println!("\n{}", e.prettify(src));
