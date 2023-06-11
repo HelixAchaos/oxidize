@@ -104,75 +104,70 @@ impl S {
 #[derive(Debug, Clone, PartialEq)]
 pub enum BorrowState {
     Union(Vec<Self>),
-    MutRef(Address),
-    ImmutRef(HashSet<Address>),
-    Moved(Option<Address>),
+    Ref(HashSet<(bool, Address)>),
+    Moved(Address),
+    Dropped,
     None,
 }
 
 impl BorrowState {
-    pub fn validate(&self, old_s: &Self, target: Address, span: Span) -> Result<(), TypeError> {
-        match (self, old_s) {
-            (&BorrowState::None, _) | (_, &BorrowState::None) => Ok(()),
-            (&BorrowState::Moved(Some(_)), &BorrowState::Moved(Some(_))) => Err(
+    pub fn validate(&self, new_s: &S, target: Address, span: Span) -> Result<(), TypeError> {
+        match (self, new_s) {
+            (&BorrowState::None, _) | (_, &S::None) => Ok(()),
+            (&BorrowState::Moved(_), &S::Moved(_)) => Err(
                 TypeError::wrap(format!("attempted to move a moved value (expected to be at address {target})"), span)
             )?,
-            (&BorrowState::Moved(Some(_)), &BorrowState::Moved(None)) => Err(
+            (&BorrowState::Moved(_), &S::MutRef(_)) => {
+                Err(TypeError::wrap(format!("attempted to create a mutable reference to a moved value (expected to be at address {target})"), span))
+            }
+            (&BorrowState::Moved(_), &S::ImmutRef(_)) => {
+                Err(TypeError::wrap(format!("attempted to create an immutable reference to a moved value (value at address {target})"), span))
+            }
+            (&BorrowState::Dropped, &S::Moved(_)) => Err(
                 TypeError::wrap(format!("attempted to move a dropped value (expected to be at address {target})"), span)
             )?,
-            (&BorrowState::Moved(Some(_)), &BorrowState::ImmutRef(_)) => Err(
-                TypeError::wrap(format!("attempted to move an immutably referenced value at address {target}"), span)
-            )?,
-            (&BorrowState::Moved(Some(_)), &BorrowState::MutRef(_)) => Err(
-                TypeError::wrap(format!("attempted to move a mutably referenced value at address {target}"), span)
-            )?,
-            (&BorrowState::Moved(Some(_)), &BorrowState::Union(ref ss)) => Ok({ss.iter().map(|s| self.validate(s, target, span.clone())).collect::<Result<_, _>>()?;}),
-            (&BorrowState::Moved(None), &BorrowState::Moved(Some(_))) => Err(
-                TypeError::wrap(format!("attempted to drop a moved value (expected to be at address {target})"), span)
-            )?,
-            (&BorrowState::Moved(None), &BorrowState::Moved(None)) => Err(
-                TypeError::wrap(format!("attempted to drop a dropped value (expected to be at address {target})"), span)
-            )?,
-            (&BorrowState::Moved(None), &BorrowState::ImmutRef(_)) => Err(
-                TypeError::wrap(format!("attempted to drop a an immutably referenced value at address {target}"), span)
-            )?,
-            (&BorrowState::Moved(None), &BorrowState::MutRef(_)) => Err(
-                TypeError::wrap(format!("attempted to drop a a mutably referenced value at address {target}"), span)
-            )?,
-            (&BorrowState::Moved(None), &BorrowState::Union(ref ss)) => Ok({ss.iter().map(|s| self.validate(s, target, span.clone())).collect::<Result<_, _>>()?;}),
-            (&BorrowState::MutRef(_), &BorrowState::Moved(Some(_))) => Err(
-                TypeError::wrap(format!("attempted to create a mutable reference to a moved value (expected to be at address {target})"), span)
-            )?,
-            (&BorrowState::MutRef(_), &BorrowState::Moved(None)) => Err(
-                TypeError::wrap(format!("attempted to create a mutable reference to a dropped value (expected to be at address {target})"), span)
-            )?,
-            (&BorrowState::MutRef(_), &BorrowState::ImmutRef(_)) => Err(
-                TypeError::wrap(format!("attempted to create a mutable reference to an immutably referenced value at address {target}"), span)
-            )?,
-            (&BorrowState::MutRef(_), &BorrowState::MutRef(_)) => Err(
-                TypeError::wrap(format!("attempted to create a mutable reference to a mutably referenced value at address {target}"), span)
-            )?,
-            (&BorrowState::MutRef(_), &BorrowState::Union(ref ss)) => Ok({ss.iter().map(|s| self.validate(s, target, span.clone())).collect::<Result<_, _>>()?;}),
-            (&BorrowState::ImmutRef(_), &BorrowState::Moved(Some(_))) => Err(
-                TypeError::wrap(format!("attempted to create an immutable reference to a moved value (expected to be at address {target})"), span)
-            )?,
-            (&BorrowState::ImmutRef(_), &BorrowState::Moved(None)) => Err(
-                TypeError::wrap(format!("attempted to create an immutable reference to a dropped value (expected to be at address {target})"), span)
-            )?,
-            (&BorrowState::ImmutRef(_), &BorrowState::ImmutRef(_)) => Ok(()),
-            (&BorrowState::ImmutRef(_), &BorrowState::MutRef(_)) => Err(
-                TypeError::wrap(format!("attempted to create an immutable reference to a mutably referenced value at address {target}"), span)
-            )?,
-            (&BorrowState::ImmutRef(_), &BorrowState::Union(ref ss)) => Ok({ss.iter().map(|s| self.validate(s, target, span.clone())).collect::<Result<_, _>>()?;}),
-            (&BorrowState::Union(ref ss), &BorrowState::Moved(_)) => Ok({ss.iter().map(|s| s.validate(old_s, target, span.clone())).collect::<Result<_, _>>()?;}),
-            (&BorrowState::Union(ref ss), &BorrowState::ImmutRef(_)) => Ok({ss.iter().map(|s| s.validate(old_s, target, span.clone())).collect::<Result<_, _>>()?;}),
-            (&BorrowState::Union(ref ss), &BorrowState::MutRef(_)) => Ok({ss.iter().map(|s| s.validate(old_s, target, span.clone())).collect::<Result<_, _>>()?;}),
-            (&BorrowState::Union(ref ss), &BorrowState::Union(_)) => Ok({ss.iter().map(|s| s.validate(old_s, target, span.clone())).collect::<Result<_, _>>()?;}),
+            (&BorrowState::Dropped, &S::MutRef(_)) => {
+                Err(TypeError::wrap(format!("attempted to create a mutable reference to a dropped value (expected to be at address {target})"), span))
+            }
+            (&BorrowState::Dropped, &S::ImmutRef(_)) => {
+                Err(TypeError::wrap(format!("attempted to create an immutable reference to a dropped value (value at address {target})"), span))
+            }
+            (&BorrowState::Ref(ref refs), &S::Moved(_)) => {
+                assert!(!refs.is_empty());
+                if refs.into_iter().any(|(b, _)| b.to_owned()) {
+                    Err(
+                        TypeError::wrap(format!("attempted to move a mutably referenced value at address {target}"), span))
+                } else {
+                    Err(
+                        TypeError::wrap(format!("attempted to move an immutably referenced value at address {target}"), span))
+                }
+            },
+            (&BorrowState::Ref(ref refs), &S::MutRef(_)) if refs.into_iter().any(|(b, _)| b.to_owned()) => Err(
+                        TypeError::wrap(format!("attempted to create a mutable reference to an already-mutably-referenced value at address {target}"), span)),
+            (&BorrowState::Ref(_), &S::MutRef(_)) => Err(
+                        TypeError::wrap(format!("attempted to create a mutable reference to an immutably referenced value at address {target}"), span)),
+
+            (&BorrowState::Ref(ref refs), &S::ImmutRef(_)) => {
+                assert!(!refs.is_empty());
+                Ok(())
+            },
+            (&BorrowState::Union(ref states) , _) => {
+                for state in states.iter() {
+                    state.validate(new_s, target, span.clone())?
+                };
+                Ok(())
+            }
+            (_, &S::Union(ref ss)) => {
+                for s in ss.iter() {
+                    self.validate(s, target, span.clone(), )?
+                };
+                Ok(())
+            }
         }
     }
     pub fn is_move(&self) -> i8 {
         match self {
-            BorrowState::Moved(Some(_)) => 1,
+            BorrowState::Moved(_) => 1,
             BorrowState::Union(ss) => {
                 if ss.iter().any(|s| s.is_move() == 1) {
                     0
@@ -185,7 +180,7 @@ impl BorrowState {
     }
     pub fn is_drop(&self) -> i8 {
         match self {
-            BorrowState::Moved(None) => 1,
+            BorrowState::Dropped => 1,
             BorrowState::Union(ss) => {
                 if ss.iter().any(|s| s.is_drop() == 1) {
                     0
@@ -198,7 +193,7 @@ impl BorrowState {
     }
     pub fn is_immut_ref(&self) -> i8 {
         match self {
-            BorrowState::ImmutRef(_) => 1,
+            BorrowState::Ref(refs) if refs.into_iter().any(|(b, _)| !b) => 1,
             BorrowState::Union(ss) => {
                 if ss.iter().any(|s| s.is_immut_ref() == 1) {
                     0
@@ -211,7 +206,7 @@ impl BorrowState {
     }
     pub fn is_mut_ref(&self) -> i8 {
         match self {
-            BorrowState::MutRef(_) => 1,
+            BorrowState::Ref(refs) if refs.into_iter().any(|(b, _)| b.to_owned()) => 1,
             BorrowState::Union(ss) => {
                 if ss.iter().any(|s| s.is_mut_ref() == 1) {
                     0
@@ -227,7 +222,10 @@ impl BorrowState {
             BorrowState::None => match tau {
                 Some(Type::Tuple(taus)) => {
                     let ss = (1..=taus.len())
-                        .map(|l| eta.get(&(ell + (l as u64))).unwrap())
+                        .map(|l| {
+                            eta.get(&(ell + (l as u64)))
+                                .unwrap_or_else(|| &BorrowState::None)
+                        })
                         .collect::<Vec<&BorrowState>>();
 
                     let errs = &mut vec![];
@@ -271,7 +269,7 @@ impl BorrowState {
                         errs.push("maybe partially mutably_referenced")
                     }
 
-                    if errs.len() == 0 {
+                    if errs.is_empty() {
                         None
                     } else {
                         Some(errs.join(" & "))
@@ -279,18 +277,29 @@ impl BorrowState {
                 }
                 _ => None,
             },
-            BorrowState::Moved(Some(new_home)) => Some(format!("moved to address {new_home}")),
-            BorrowState::Moved(None) => Some("dropped".to_string()),
-            BorrowState::ImmutRef(referencers) => Some(format!(
-                "immutably referenced by addresses [{}]",
-                referencers
-                    .iter()
-                    .map(u64::to_string)
-                    .collect::<Vec<String>>()
-                    .join(", ")
-            )),
-            BorrowState::MutRef(referencer) => {
-                Some(format!("mutably referenced by address {}", referencer))
+            BorrowState::Moved(new_home) => Some(format!("moved to address {new_home}")),
+            BorrowState::Dropped => Some("dropped".to_string()),
+            BorrowState::Ref(referencers) => {
+                let mut s: Vec<String> = Vec::new();
+                let (mutref, immutrefs): (Vec<_>, Vec<_>) =
+                    referencers.into_iter().partition(|(b, _)| b.to_owned());
+
+                if !immutrefs.is_empty() {
+                    s.push(format!(
+                        "immutably referenced by addresses [{}]",
+                        referencers
+                            .iter()
+                            .map(|(_, a)| a.to_string())
+                            .collect::<Vec<String>>()
+                            .join(", ")
+                    ))
+                }
+                if !mutref.is_empty() {
+                    assert!(mutref.len() == 1);
+                    let (_, referencer) = mutref.get(0).unwrap();
+                    s.push(format!("mutably referenced by address {}", referencer))
+                }
+                Some(s.join(" and "))
             }
             BorrowState::Union(loans) => Some(
                 loans
@@ -306,12 +315,6 @@ impl BorrowState {
         match (s1.clone(), s2.clone()) {
             (BorrowState::None, _) => Ok(s2),
             (_, BorrowState::None) => Ok(s1),
-            (BorrowState::MutRef(_), BorrowState::MutRef(_)) => {
-                Ok(BorrowState::Union(vec![s1, s2]))
-            }
-            (BorrowState::ImmutRef(addrs1), BorrowState::ImmutRef(addrs2)) => Ok(
-                BorrowState::ImmutRef(addrs1.into_iter().chain(addrs2.into_iter()).collect()),
-            ),
             (BorrowState::Union(ss1), BorrowState::Union(ss2)) => {
                 Ok(BorrowState::Union([ss1, ss2].concat()))
             }
@@ -326,51 +329,69 @@ impl BorrowState {
             BorrowState::Union(ss) => {
                 BorrowState::Union(ss.into_iter().map(|s| s.remove(addr)).collect())
             }
-            BorrowState::MutRef(s) => {
-                if s == addr {
-                    BorrowState::None
-                } else {
-                    self.clone()
-                }
-            }
-            BorrowState::ImmutRef(ss) => {
-                let mut ss_prime = ss.clone();
+            BorrowState::Ref(referencers) => {
+                let filtered: HashSet<_> = referencers
+                    .into_iter()
+                    .filter_map(|(b, a)| {
+                        if a != addr {
+                            Some((b.to_owned(), a.to_owned()))
+                        } else {
+                            None
+                        }
+                    })
+                    .collect();
 
-                (&mut ss_prime).remove(&addr);
-                if ss_prime.len() > 0 {
-                    BorrowState::ImmutRef(ss_prime)
-                } else {
+                if filtered.is_empty() {
                     BorrowState::None
+                } else {
+                    BorrowState::Ref(filtered)
                 }
             }
-            BorrowState::Moved(Some(ell)) => {
+            BorrowState::Moved(ell) => {
                 if addr == ell {
-                    BorrowState::Moved(None)
+                    BorrowState::Dropped
                 } else {
-                    BorrowState::Moved(Some(*ell))
+                    BorrowState::Moved(*ell)
                 }
             }
             _ => self.clone(),
         }
     }
 
-    pub fn may_move(&self) -> Result<(), String> {
+    pub fn may_drop(&self) -> Result<(), String> {
         match self {
-            BorrowState::Moved(Some(addr)) => Err(format!(
-                "You're trying to move a value that was already moved to address {}.",
+            BorrowState::Moved(addr) => Err(format!(
+                "You're trying to use/drop a value that was already moved to address {}.",
                 addr
             )),
-            BorrowState::Moved(None) => {
-                Err(format!("You're trying to move a value that was dropped."))
-            }
-            BorrowState::ImmutRef(_) | BorrowState::MutRef(_) => {
-                Err(format!("You can't move something referred to."))
-            }
+            BorrowState::Dropped => Err(format!(
+                "You're trying to use/drop a value that was already dropped."
+            )),
+            BorrowState::Ref(_) => Err(format!("You can't use/drop something referred to.")),
             BorrowState::None => Ok(()),
             BorrowState::Union(ss) => {
                 let _ = ss
                     .into_iter()
-                    .map(BorrowState::may_move)
+                    .map(BorrowState::may_drop)
+                    .collect::<Result<Vec<_>, String>>()?;
+                Ok(())
+            }
+        }
+    }
+
+    pub fn may_force_drop(&self) -> Result<(), String> {
+        match self {
+            BorrowState::Moved(addr) => Err(format!(
+                "You're trying to use/drop a value that was already moved to address {}.",
+                addr
+            )),
+            BorrowState::Dropped => Ok(()),
+            BorrowState::Ref(_) => Err(format!("You can't use/drop something referred to.")),
+            BorrowState::None => Ok(()),
+            BorrowState::Union(ss) => {
+                let _ = ss
+                    .into_iter()
+                    .map(BorrowState::may_force_drop)
                     .collect::<Result<Vec<_>, String>>()?;
                 Ok(())
             }

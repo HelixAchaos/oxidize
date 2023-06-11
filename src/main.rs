@@ -32,6 +32,8 @@ fn main() -> Result<(), String> {
 
     let mut tokens = VecDeque::from(tokens);
 
+    let tokens_copy = tokens.clone();
+
     println!("token_count = {}", tokens.len());
     typechecker::pause();
 
@@ -54,7 +56,7 @@ fn main() -> Result<(), String> {
     let mut gamma: Gamma = Gamma::new();
     let mut eta: Eta = Eta::new();
     let mut mu: Mu = Mu::new();
-    let file = &mut File::new(file_name, tokens);
+    let file = &mut File::new(file_name, tokens_copy);
 
     match typechecker::type_expr(file, spast, &mut gamma, &mut eta, &mut mu, true) {
         Ok(_stast) => {

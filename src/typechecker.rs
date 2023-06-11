@@ -48,7 +48,6 @@ impl Mu {
         self.location_map.remove(k)
     }
     fn diagnostics(&self, gamma: &Gamma) -> String {
-        // let loans: BTreeMap<_, _> = self.location_map.iter().map(|(k, v)| (v, k)).collect();
         let mut addrs: Vec<(&Address, &Var)> = self
             .location_map
             .iter()
@@ -110,30 +109,25 @@ impl Eta {
                     self.loans.insert(pos, BorrowState::None);
                 }
                 S::Moved(l) => {
-                    let pos = l + (offset as u64);
-                    self.wipe(&pos);
-                    self.loans.insert(pos, BorrowState::Moved(Some(ell)));
+                    let pos = ell + (offset as u64);
+                    self.wipe(&l);
+                    self.loans.insert(l, BorrowState::Moved(pos));
                 }
                 S::MutRef(target) => {
-                    if let Some(old_s) = self.get(&(target + (offset as u64))) {
-                        BorrowState::MutRef(target).validate(old_s, target, span)?;
+                    let pos = ell + (offset as u64);
+                    if let Some(old_s) = self.get(&pos) {
+                        old_s.validate(&s, ell, span)?;
                     }
-                    let pos = target + (offset as u64);
-                    self.wipe(&pos);
-                    self.loans.insert(pos, BorrowState::MutRef(ell));
+                    self.loans
+                        .insert(target, BorrowState::Ref(HashSet::from([(true, pos)])));
                 }
                 S::ImmutRef(target) => {
-                    if let Some(old_s) = self.get(&(target + (offset as u64))) {
-                        BorrowState::ImmutRef(HashSet::from([target])).validate(
-                            old_s,
-                            target.to_owned(),
-                            span.clone(),
-                        )?;
+                    let pos = ell + (offset as u64);
+                    if let Some(old_s) = self.get(&pos) {
+                        old_s.validate(&s, ell, span)?
                     }
-                    let pos = target + (offset as u64);
-                    self.wipe(&pos);
                     self.loans
-                        .insert(pos, BorrowState::ImmutRef(HashSet::from([ell])));
+                        .insert(target, BorrowState::Ref(HashSet::from([(false, pos)])));
                 }
                 S::Union(onions) => {
                     for onion in onions {
@@ -151,53 +145,71 @@ impl Eta {
     }
 
     fn wipe(&mut self, ell: &Address) {
-        for (k, s) in self.loans.iter() {
+        for (k, s) in self.loans.clone().iter() {
             let t = s.remove(ell);
             self.loans.insert(*k, t);
-            break;
         }
     }
 
-    fn drop(&mut self, ell: &Address, t: &Type) -> Result<(), String> {
-        if let Some(bs) = self.get(ell) {
-            match bs {
-                BorrowState::Union(ss) => {
-                    if ss.iter().all(|bs| match bs {
-                        BorrowState::Moved(_) | BorrowState::None => true,
-                        _ => false,
-                    }) {
-                        self.wipe(ell);
-                    } else {
-                        Err(format!(
-                            "You can't use/drop a value that has a reference pointing to it at {ell}."
-                        ))?
-                    }
-                }
-                BorrowState::MutRef(_) => Err(format!(
-                    "You can't use/drop a value that has a mutable reference pointing to it at {ell}."
-                ))?,
-                BorrowState::ImmutRef(_) => Err(format!(
-                    "You can't use/drop a value that has an immutable reference pointing to it. at {ell}"
-                ))?,
-                BorrowState::Moved(_) => Err(format!(
-                    "You can't use/drop a moved value. It's already dropped."
-                ))?,
-                BorrowState::None => {
-                    self.wipe(ell);
-                }
+    fn drop(&mut self, ell: &Address, t: &Type, span: Span) -> Result<(), TypeError> {
+        let ells = match t {
+            Type::Tuple(ts) => [
+                vec![ell.to_owned()],
+                (0..ts.len())
+                    .into_iter()
+                    .map(|offset| (ell + (offset as u64) + 1))
+                    .collect(),
+            ]
+            .concat(),
+            _ => vec![ell.to_owned()],
+        };
+        for ell in ells.iter() {
+            if let Some(_bs) = self.get(ell) {
+                TypeError::result_wrap(self.may_drop(ell, t), span.clone())?;
+                self.wipe(ell);
             }
         }
-
-        match t {
-            Type::Tuple(ts) => {
-                for (i, t) in ts.into_iter().enumerate() {
-                    self.drop(&(ell + (i as u64) + 1), t)?;
-                }
-            }
-            _ => (),
-        }
-
         Ok(())
+    }
+
+    fn force_drop(&mut self, ell: &Address, t: &Type, span: Span) -> Result<(), TypeError> {
+        let ells = match t {
+            Type::Tuple(ts) => [
+                vec![ell.to_owned()],
+                (0..ts.len())
+                    .into_iter()
+                    .map(|offset| (ell + (offset as u64) + 1))
+                    .collect(),
+            ]
+            .concat(),
+            _ => vec![ell.to_owned()],
+        };
+        for ell in ells.iter() {
+            if let Some(_bs) = self.get(ell) {
+                TypeError::result_wrap(self.may_force_drop(ell, t), span.clone())?;
+                self.wipe(ell);
+            }
+        }
+        Ok(())
+    }
+
+    fn sudo_drop(&mut self, ell: &Address, t: &Type) {
+        let ells = match t {
+            Type::Tuple(ts) => [
+                vec![ell.to_owned()],
+                (0..ts.len())
+                    .into_iter()
+                    .map(|offset| (ell + (offset as u64) + 1))
+                    .collect(),
+            ]
+            .concat(),
+            _ => vec![ell.to_owned()],
+        };
+        for ell in ells.iter() {
+            if let Some(_bs) = self.get(ell) {
+                self.wipe(ell);
+            }
+        }
     }
 
     fn mov(&mut self, ell: Address, new_home: Option<Vec<Address>>, t: Type) {
@@ -230,20 +242,18 @@ impl Eta {
             _ => {
                 if let Some(new_home) = new_home {
                     for l in new_home {
-                        self.loans.insert(ell, BorrowState::Moved(Some(l)));
+                        self.loans.insert(ell, BorrowState::Moved(l));
                     }
                 } else {
-                    self.loans.insert(ell, BorrowState::Moved(None));
+                    self.loans.insert(ell, BorrowState::Dropped);
                 }
             }
         }
     }
 
-    fn may_move(&self, ell: &Address, t: &Type) -> Result<(), String> {
+    fn may_drop(&self, ell: &Address, t: &Type) -> Result<(), String> {
         if let Some(s) = self.get(ell) {
-            s.may_move()?;
-        } else {
-            panic!()
+            s.may_drop()?;
         }
 
         match t {
@@ -251,7 +261,7 @@ impl Eta {
                 match ts
                     .into_iter()
                     .enumerate()
-                    .map(|(i, t)| self.may_move(&(ell + (i as u64) + 1), t))
+                    .map(|(i, t)| self.may_drop(&(ell + (i as u64) + 1), t))
                     .collect::<Result<Vec<_>, String>>()
                 {
                     Ok(_) => Ok(()),
@@ -262,6 +272,26 @@ impl Eta {
         }
     }
 
+    fn may_force_drop(&self, ell: &Address, t: &Type) -> Result<(), String> {
+        if let Some(s) = self.get(ell) {
+            s.may_force_drop()?;
+        }
+
+        match t {
+            Type::Tuple(ts) => {
+                match ts
+                    .into_iter()
+                    .enumerate()
+                    .map(|(i, t)| self.may_force_drop(&(ell + (i as u64) + 1), t))
+                    .collect::<Result<Vec<_>, String>>()
+                {
+                    Ok(_) => Ok(()),
+                    Err(e) => Err(format!("Partial: {}", e)),
+                }
+            }
+            _ => Ok(()),
+        }
+    }
     fn unify(eta1: &Eta, eta2: &Eta) -> Result<Eta, String> {
         let top_keys = eta1
             .loans
@@ -305,9 +335,7 @@ impl Eta {
                     if let Some(msg) = loan.stringify(self, ell, Some(tau)) {
                         value_info.push(format!(
                             "\t{}{ell} is {}",
-                            " ".repeat(
-                                remaining_indents.last().or(Some(&(0 as usize))).unwrap() + 1
-                            ),
+                            " ".repeat(remaining_indents.last().unwrap_or(&(0 as usize)) + 1),
                             msg
                         ));
                     }
@@ -334,10 +362,10 @@ impl Eta {
                 }
             }
         }
-        if value_info.len() > 0 {
-            format!("\tthe values at addresses...\n{}", value_info.join("\n"))
-        } else {
+        if value_info.is_empty() {
             format!("")
+        } else {
+            format!("\tthe values at addresses...\n{}", value_info.join("\n"))
         }
     }
 }
@@ -778,11 +806,11 @@ pub fn type_expr(
         }
         EExpr::Lvalue((lhs, lhs_span)) => {
             let (lhs, ell) = type_lhs((lhs, lhs_span.clone()), ctx, eta, mu)?;
-            TypeError::result_wrap(eta.drop(&ell, &lhs.extract_type()), span.clone())?;
+            eta.drop(&ell, &lhs.extract_type(), span.clone())?;
 
             match lhs.extract_type() {
                 Type::Ref(_, ref tau) => {
-                    TypeError::result_wrap(eta.may_move(&ell, tau), span.clone())?;
+                    TypeError::result_wrap(eta.may_drop(&ell, tau), span.clone())?;
                     eta.mov(ell, None, *tau.clone());
                     Ok((
                         TExpr::Lvalue(*tau.to_owned(), (lhs, lhs_span)),
@@ -829,34 +857,29 @@ pub fn type_expr(
 
                     for (i, ref ell) in ells.iter().enumerate() {
                         let par = if i == 0 { "" } else { "partially " };
-                        let s = eta.get(ell).unwrap();
-                        if s.is_mut_ref() > -1 {
-                            Err(TypeError::wrap(format!(
-                                    "cannot borrow `{}` as immutable because it is {}borrowed as mutable",
-                                    tlhs.extract_lhs().to_string(),
-                                    par
-                                ), span.clone()))
-                        } else if s.is_move() > -1 {
-                            Err(TypeError::wrap(
-                                format!(
-                                    "cannot borrow `{}` as immutable because it is {}moved",
-                                    tlhs.extract_lhs().to_string(),
-                                    par
-                                ),
-                                span.clone(),
-                            ))
-                        } else if s.is_drop() > -1 {
-                            Err(TypeError::wrap(
-                                format!(
-                                    "cannot borrow `{}` as immutable because it is {}dropped",
-                                    tlhs.extract_lhs().to_string(),
-                                    par
-                                ),
-                                span.clone(),
-                            ))
-                        } else {
-                            Ok(())
-                        }?
+                        if let Some(bs) = eta.get(ell) {
+                            if bs.is_move() > -1 {
+                                Err(TypeError::wrap(
+                                    format!(
+                                        "cannot borrow `{}` as immutable because it is {}moved",
+                                        tlhs.extract_lhs().to_string(),
+                                        par
+                                    ),
+                                    span.clone(),
+                                ))
+                            } else if bs.is_drop() > -1 {
+                                Err(TypeError::wrap(
+                                    format!(
+                                        "cannot borrow `{}` as immutable because it is {}dropped",
+                                        tlhs.extract_lhs().to_string(),
+                                        par
+                                    ),
+                                    span.clone(),
+                                ))
+                            } else {
+                                Ok(())
+                            }?
+                        }
                     }
 
                     let t = Type::Ref(false, boxed_tau);
@@ -892,44 +915,44 @@ pub fn type_expr(
                     };
                     for (i, ell) in ells.iter().enumerate() {
                         let par = if i == 0 { "" } else { "partially " };
-                        match eta.get(ell) {
-                            Some(s) => {
-                                if s.is_immut_ref() > -1 {
-                                    Err(TypeError::wrap(format!(
-                                        "cannot borrow `{}` as mutable because it is {}immutably borrowed",
-                                        tlhs.extract_lhs().to_string(),
-                                        par
-                                    ), span.clone()))
-                                } else if s.is_mut_ref() > -1 {
-                                    Err(TypeError::wrap(format!(
-                                    "cannot borrow `{}` as mutable because it is {}mutably borrowed",
+                        if let Some(bs) = eta.get(ell) {
+                            if bs.is_immut_ref() > -1 {
+                                Err(TypeError::wrap(format!(
+                                    "cannot borrow `{}` as mutable because it is {}immutably borrowed",
                                     tlhs.extract_lhs().to_string(),
                                     par
                                 ), span.clone()))
-                                } else if s.is_move() > -1 {
-                                    Err(TypeError::wrap(
-                                        format!(
-                                            "cannot borrow `{}` as mutable because it is {}moved",
-                                            tlhs.extract_lhs().to_string(),
-                                            par
-                                        ),
-                                        span.clone(),
-                                    ))
-                                } else if s.is_drop() > -1 {
-                                    Err(TypeError::wrap(
-                                        format!(
-                                            "cannot borrow `{}` as mutable because it is {}dropped",
-                                            tlhs.extract_lhs().to_string(),
-                                            par
-                                        ),
-                                        span.clone(),
-                                    ))
-                                } else {
-                                    Ok(())
-                                }
-                            }
-                            _ => Ok(()),
-                        }?
+                            } else if bs.is_mut_ref() > -1 {
+                                Err(TypeError::wrap(
+                                    format!(
+                                "cannot borrow `{}` as mutable because it is {}mutably borrowed",
+                                tlhs.extract_lhs().to_string(),
+                                par
+                            ),
+                                    span.clone(),
+                                ))
+                            } else if bs.is_move() > -1 {
+                                Err(TypeError::wrap(
+                                    format!(
+                                        "cannot borrow `{}` as mutable because it is {}moved",
+                                        tlhs.extract_lhs().to_string(),
+                                        par
+                                    ),
+                                    span.clone(),
+                                ))
+                            } else if bs.is_drop() > -1 {
+                                Err(TypeError::wrap(
+                                    format!(
+                                        "cannot borrow `{}` as mutable because it is {}dropped",
+                                        tlhs.extract_lhs().to_string(),
+                                        par
+                                    ),
+                                    span.clone(),
+                                ))
+                            } else {
+                                Ok(())
+                            }?
+                        }
                     }
 
                     let t = Type::Ref(true, boxed_tau);
@@ -965,10 +988,10 @@ pub fn type_expr(
             }
 
             let (te2, s2) = type_expr(file, *then.clone(), ctx, eta, mu, display)?;
-            ctx.pop_level(mu, eta);
             reset_counter((mu.max_addr() as usize) + 1);
+            ctx.pop_level(mu, eta);
 
-            TypeError::result_wrap(eta.drop(&ell, &te1.extract_type()), span.clone())?;
+            eta.force_drop(&ell, &te1.extract_type(), span.clone())?;
 
             for (s, s_span) in s2.iter() {
                 for referred in s.extract_referred_addresses() {
@@ -1015,10 +1038,10 @@ pub fn type_expr(
             }
 
             let (te2, s2) = type_expr(file, *then.clone(), ctx, eta, mu, display)?;
-            ctx.pop_level(mu, eta);
             reset_counter((mu.max_addr() as usize) + 1);
+            ctx.pop_level(mu, eta);
 
-            TypeError::result_wrap(eta.drop(&ell, &te1.extract_type()), span.clone())?;
+            eta.force_drop(&ell, &te1.extract_type(), span.clone())?;
             for (s, s_span) in s2.iter() {
                 for referred in s.extract_referred_addresses() {
                     if referred >= ell {
@@ -1068,18 +1091,22 @@ pub fn type_expr(
             let (te2, ss) = type_expr(file, *e2.clone(), ctx, eta, mu, display)?;
 
             if tau_lhs == te2.extract_type() {
-                let span = e2.1;
+                let e2_span = e2.1;
 
                 if let TExpr::Tuple(_, texprs) = te2.clone() {
                     assert!(texprs.len() == ss.len() - 1);
                 }
 
-                TypeError::result_wrap(eta.drop(&ell, &tau_lhs), span.clone())?;
+                eta.sudo_drop(&ell, &tau_lhs);
 
                 eta.insert(ell, ss)?;
 
                 Ok((
-                    TExpr::Assign(Type::Unit, (tlhs, lhs_span), Box::new((te2, span.clone()))),
+                    TExpr::Assign(
+                        Type::Unit,
+                        (tlhs, lhs_span),
+                        Box::new((te2, e2_span.clone())),
+                    ),
                     vec![(S::None, span)],
                 ))
             } else {
