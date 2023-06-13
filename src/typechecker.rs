@@ -1,6 +1,5 @@
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::fs;
-use std::iter::{self};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use crate::ast::{EExpr, ELhs, Span, Spanned, TExpr, TLhs};
@@ -100,43 +99,17 @@ impl Eta {
         self.loans.get(ell)
     }
 
-    fn insert(&mut self, ell: Address, ss: Vec<Spanned<S>>) -> Result<(), TypeError> {
-        for (offset, (s, span)) in ss.into_iter().enumerate() {
-            match s {
-                S::None => {
-                    let pos = ell + (offset as u64);
-                    self.wipe(&pos);
-                    self.loans.insert(pos, BorrowState::None);
-                }
-                S::Moved(l) => {
-                    let pos = ell + (offset as u64);
-                    self.wipe(&l);
-                    self.loans.insert(l, BorrowState::Moved(pos));
-                }
-                S::MutRef(target) => {
-                    let pos = ell + (offset as u64);
-                    if let Some(old_s) = self.get(&pos) {
-                        old_s.validate(&s, ell, span)?;
-                    }
-                    self.loans
-                        .insert(target, BorrowState::Ref(HashSet::from([(true, pos)])));
-                }
-                S::ImmutRef(target) => {
-                    let pos = ell + (offset as u64);
-                    if let Some(old_s) = self.get(&pos) {
-                        old_s.validate(&s, ell, span)?
-                    }
-                    self.loans
-                        .insert(target, BorrowState::Ref(HashSet::from([(false, pos)])));
-                }
-                S::Union(onions) => {
-                    for onion in onions {
-                        self.insert(ell, vec![(onion, span.clone())])?;
-                    }
-                }
+    fn insert(&mut self, ell: Address, ss: Vec<Spanned<S>>) {
+        for (offset, (s, _)) in ss.into_iter().enumerate() {
+            let pos = ell + (offset as u64);
+
+            for (k, mut bs) in s.flip(pos) {
+                if let Some(old_bs) = self.loans.remove(&k) {
+                    bs = BorrowState::join_refs(bs, old_bs)
+                };
+                self.loans.insert(k, bs);
             }
         }
-        Ok(())
     }
 
     fn replace(&mut self, eta: Eta) {
@@ -145,154 +118,120 @@ impl Eta {
     }
 
     fn wipe(&mut self, ell: &Address) {
-        for (k, s) in self.loans.clone().iter() {
-            let t = s.remove(ell);
-            self.loans.insert(*k, t);
+        for (k, bstate) in self.loans.clone().iter() {
+            let bstate = bstate.remove(ell);
+            self.loans.insert(*k, bstate);
         }
     }
 
     fn drop(&mut self, ell: &Address, t: &Type, span: Span) -> Result<(), TypeError> {
-        let ells = match t {
-            Type::Tuple(ts) => [
-                vec![ell.to_owned()],
-                (0..ts.len())
-                    .into_iter()
-                    .map(|offset| (ell + (offset as u64) + 1))
-                    .collect(),
-            ]
-            .concat(),
-            _ => vec![ell.to_owned()],
-        };
-        for ell in ells.iter() {
+        let ells = t.get_typed_addresses(ell.to_owned());
+
+        for (ell, t) in ells.into_iter() {
+            if let Some(_bs) = self.get(&ell) {
+                TypeError::result_wrap(self.may_drop(&ell, t), span.clone())?;
+                self.wipe(&ell);
+                self.loans.insert(ell, BorrowState::Dropped);
+            }
+        }
+        Ok(())
+    }
+
+    fn let_go(&mut self, ell: &Address, t: &Type, span: Span) -> Result<(), TypeError> {
+        let ells = t.get_typed_addresses(ell.to_owned());
+
+        for (ell, t) in ells.iter() {
             if let Some(_bs) = self.get(ell) {
-                TypeError::result_wrap(self.may_drop(ell, t), span.clone())?;
+                TypeError::result_wrap(self.may_let_go(ell, t), span.clone())?;
                 self.wipe(ell);
             }
         }
         Ok(())
     }
 
-    fn force_drop(&mut self, ell: &Address, t: &Type, span: Span) -> Result<(), TypeError> {
-        let ells = match t {
-            Type::Tuple(ts) => [
-                vec![ell.to_owned()],
-                (0..ts.len())
-                    .into_iter()
-                    .map(|offset| (ell + (offset as u64) + 1))
-                    .collect(),
-            ]
-            .concat(),
-            _ => vec![ell.to_owned()],
-        };
-        for ell in ells.iter() {
+    fn sudo_drop(&mut self, ell: &Address, t: &Type, span: Span) -> Result<(), TypeError> {
+        let ells = t.get_typed_addresses(ell.to_owned());
+
+        for (ell, t) in ells.iter() {
             if let Some(_bs) = self.get(ell) {
-                TypeError::result_wrap(self.may_force_drop(ell, t), span.clone())?;
+                TypeError::result_wrap(self.may_overwrite(ell, t), span.clone())?;
+                self.loans.insert(ell.to_owned(), BorrowState::None);
                 self.wipe(ell);
             }
         }
         Ok(())
     }
 
-    fn sudo_drop(&mut self, ell: &Address, t: &Type) {
-        let ells = match t {
-            Type::Tuple(ts) => [
-                vec![ell.to_owned()],
-                (0..ts.len())
-                    .into_iter()
-                    .map(|offset| (ell + (offset as u64) + 1))
-                    .collect(),
-            ]
-            .concat(),
-            _ => vec![ell.to_owned()],
-        };
-        for ell in ells.iter() {
-            if let Some(_bs) = self.get(ell) {
-                self.wipe(ell);
-            }
-        }
-    }
+    fn may_drop(&self, ell: &Address, t: Type) -> Result<(), String> {
+        let binding = t.get_addresses(ell.to_owned());
+        let (ell, ells) = binding.split_first().unwrap();
 
-    fn mov(&mut self, ell: Address, new_home: Option<Vec<Address>>, t: Type) {
-        match t {
-            Type::Tuple(ts) => {
-                if let Some(new_home) = new_home {
-                    self.mov(
-                        ell,
-                        Some(vec![new_home.get(0).unwrap().clone()]),
-                        Type::Unit, // to treat it as one-element
-                    );
-                    for (i, t) in ts.into_iter().enumerate() {
-                        self.mov(
-                            ell + (i as u64) + 1,
-                            Some(new_home.iter().map(|l| l + (i as u64) + 1).collect()),
-                            t,
-                        );
+        if let Some(bstate) = self.get(ell) {
+            bstate.may_drop()?;
+        }
+
+        ells.into_iter()
+            .map(|ell| {
+                if let Some(bstate) = self.get(ell) {
+                    match bstate.may_drop() {
+                        Ok(()) => Ok(()),
+                        Err(e) => Err(format!("Partial: {}", e)),
                     }
                 } else {
-                    self.mov(
-                        ell,
-                        None,
-                        Type::Unit, // to treat it as one-element
-                    );
-                    for (i, t) in ts.into_iter().enumerate() {
-                        self.mov(ell + (i as u64) + 1, None, t);
-                    }
+                    Ok(())
                 }
-            }
-            _ => {
-                if let Some(new_home) = new_home {
-                    for l in new_home {
-                        self.loans.insert(ell, BorrowState::Moved(l));
+            })
+            .collect::<Result<Vec<_>, String>>()?;
+        Ok(())
+    }
+
+    fn may_let_go(&self, ell: &Address, t: &Type) -> Result<(), String> {
+        let binding = t.get_addresses(ell.to_owned());
+        let (ell, ells) = binding.split_first().unwrap();
+
+        if let Some(bstate) = self.get(ell) {
+            bstate.may_let_go()?;
+        }
+
+        ells.into_iter()
+            .map(|ell| {
+                if let Some(bstate) = self.get(ell) {
+                    match bstate.may_let_go() {
+                        Ok(()) => Ok(()),
+                        Err(e) => Err(format!("Partial: {}", e)),
                     }
                 } else {
-                    self.loans.insert(ell, BorrowState::Dropped);
+                    Ok(())
                 }
-            }
-        }
+            })
+            .collect::<Result<Vec<_>, String>>()?;
+        Ok(())
     }
 
-    fn may_drop(&self, ell: &Address, t: &Type) -> Result<(), String> {
-        if let Some(s) = self.get(ell) {
-            s.may_drop()?;
+    fn may_overwrite(&self, ell: &Address, t: &Type) -> Result<(), String> {
+        let binding = t.get_addresses(ell.to_owned());
+        let (ell, ells) = binding.split_first().unwrap();
+
+        if let Some(bstate) = self.get(ell) {
+            bstate.may_overwrite()?;
         }
 
-        match t {
-            Type::Tuple(ts) => {
-                match ts
-                    .into_iter()
-                    .enumerate()
-                    .map(|(i, t)| self.may_drop(&(ell + (i as u64) + 1), t))
-                    .collect::<Result<Vec<_>, String>>()
-                {
-                    Ok(_) => Ok(()),
-                    Err(e) => Err(format!("Partial: {}", e)),
+        ells.into_iter()
+            .map(|ell| {
+                if let Some(bstate) = self.get(ell) {
+                    match bstate.may_overwrite() {
+                        Ok(()) => Ok(()),
+                        Err(e) => Err(format!("Partial: {}", e)),
+                    }
+                } else {
+                    Ok(())
                 }
-            }
-            _ => Ok(()),
-        }
+            })
+            .collect::<Result<Vec<_>, String>>()?;
+        Ok(())
     }
 
-    fn may_force_drop(&self, ell: &Address, t: &Type) -> Result<(), String> {
-        if let Some(s) = self.get(ell) {
-            s.may_force_drop()?;
-        }
-
-        match t {
-            Type::Tuple(ts) => {
-                match ts
-                    .into_iter()
-                    .enumerate()
-                    .map(|(i, t)| self.may_force_drop(&(ell + (i as u64) + 1), t))
-                    .collect::<Result<Vec<_>, String>>()
-                {
-                    Ok(_) => Ok(()),
-                    Err(e) => Err(format!("Partial: {}", e)),
-                }
-            }
-            _ => Ok(()),
-        }
-    }
-    fn unify(eta1: &Eta, eta2: &Eta) -> Result<Eta, String> {
+    fn unify(eta1: &Eta, eta2: &Eta) -> Eta {
         let top_keys = eta1
             .loans
             .keys()
@@ -301,25 +240,16 @@ impl Eta {
         let loans = top_keys
             .into_iter()
             .map(|k| {
-                let v1 = match eta1.loans.get(k) {
-                    Some(v1) => v1.to_owned(),
-                    None => BorrowState::None,
-                };
-                let v2 = match eta2.loans.get(k) {
-                    Some(v2) => v2.to_owned(),
-                    None => BorrowState::None,
-                };
-                match BorrowState::join(v1, v2) {
-                    Ok(s) => Ok((k.to_owned(), s)),
-                    Err(e) => Err(e),
-                }
+                let v1 = eta1.loans.get(k).unwrap_or(&BorrowState::None).to_owned();
+                let v2 = eta2.loans.get(k).unwrap_or(&BorrowState::None).to_owned();
+                (k.to_owned(), BorrowState::join(v1, v2))
             })
-            .collect::<Result<BTreeMap<Address, BorrowState>, String>>()?;
+            .collect::<BTreeMap<Address, BorrowState>>();
 
-        Ok(Eta {
+        Eta {
             loans,
             unified: true,
-        })
+        }
     }
     fn diagnostics(&self, mu: &Mu, gamma: &Gamma) -> String {
         let value_info: &mut Vec<String> = &mut vec![];
@@ -394,9 +324,11 @@ impl Gamma {
     }
     fn pop_level(&mut self, mu: &mut Mu, eta: &mut Eta) {
         let scope = self.scopes.pop().unwrap();
-        for var in scope.keys() {
-            if let Some(ell) = mu.remove(var) {
-                eta.wipe(&ell)
+        for (var, (_, tau)) in scope.into_iter() {
+            if let Some(ell) = mu.remove(&var) {
+                for ell in tau.get_addresses(ell) {
+                    eta.wipe(&ell)
+                }
             }
         }
     }
@@ -751,10 +683,7 @@ pub fn type_expr(
 
             // Mu doesn't need to be joined because each variable has one canonical address,
             // and the branches will be joined into the outer scope.
-            let new_eta = match Eta::unify(&then_eta, &else_eta) {
-                Ok(eta) => Ok(eta),
-                Err(msg) => Err(TypeError::wrap(msg, span.clone())),
-            }?;
+            let new_eta = Eta::unify(&then_eta, &else_eta);
             eta.replace(new_eta);
 
             cls();
@@ -806,16 +735,18 @@ pub fn type_expr(
         }
         EExpr::Lvalue((lhs, lhs_span)) => {
             let (lhs, ell) = type_lhs((lhs, lhs_span.clone()), ctx, eta, mu)?;
-            eta.drop(&ell, &lhs.extract_type(), span.clone())?;
 
             match lhs.extract_type() {
                 Type::Ref(_, ref tau) => {
-                    TypeError::result_wrap(eta.may_drop(&ell, tau), span.clone())?;
-                    eta.mov(ell, None, *tau.clone());
-                    Ok((
-                        TExpr::Lvalue(*tau.to_owned(), (lhs, lhs_span)),
-                        vec![(S::Moved(ell), span)],
-                    ))
+                    eta.drop(&ell, tau, span.clone())?;
+
+                    let ells = tau.get_addresses(ell);
+                    let mut spanned_s = vec![];
+                    for ell in ells {
+                        spanned_s.push((S::Moved(ell), span.clone()));
+                    }
+
+                    Ok((TExpr::Lvalue(*tau.to_owned(), (lhs, lhs_span)), spanned_s))
                 }
                 _ => panic!(),
             }
@@ -844,17 +775,7 @@ pub fn type_expr(
             let (tlhs, ell) = type_lhs((lhs, lhs_span.clone()), ctx, eta, mu)?;
             match tlhs.extract_type() {
                 Type::Ref(_, boxed_tau) => {
-                    let ells = match *boxed_tau.clone() {
-                        Type::Tuple(taus) => iter::once(ell)
-                            .chain(
-                                taus.iter()
-                                    .enumerate()
-                                    .map(|(i, _stast)| ell + (i as u64) + 1),
-                            )
-                            .collect(),
-                        _ => vec![ell],
-                    };
-
+                    let ells = boxed_tau.get_addresses(ell);
                     for (i, ref ell) in ells.iter().enumerate() {
                         let par = if i == 0 { "" } else { "partially " };
                         if let Some(bs) = eta.get(ell) {
@@ -903,16 +824,7 @@ pub fn type_expr(
                         ))?
                     }
 
-                    let ells = match *boxed_tau.clone() {
-                        Type::Tuple(taus) => iter::once(ell)
-                            .chain(
-                                taus.iter()
-                                    .enumerate()
-                                    .map(|(i, _stast)| ell + (i as u64) + 1),
-                            )
-                            .collect(),
-                        _ => vec![ell],
-                    };
+                    let ells = boxed_tau.get_addresses(ell);
                     for (i, ell) in ells.iter().enumerate() {
                         let par = if i == 0 { "" } else { "partially " };
                         if let Some(bs) = eta.get(ell) {
@@ -976,7 +888,7 @@ pub fn type_expr(
                     let _ = generate_address();
                 }
             }
-            eta.insert(ell, ss)?;
+            eta.insert(ell, ss);
             mu.insert(name.clone(), ell);
 
             if display {
@@ -990,8 +902,8 @@ pub fn type_expr(
             let (te2, s2) = type_expr(file, *then.clone(), ctx, eta, mu, display)?;
             reset_counter((mu.max_addr() as usize) + 1);
             ctx.pop_level(mu, eta);
-
-            eta.force_drop(&ell, &te1.extract_type(), span.clone())?;
+            
+            eta.let_go(&ell, &te1.extract_type(), span.clone())?;
 
             for (s, s_span) in s2.iter() {
                 for referred in s.extract_referred_addresses() {
@@ -1026,7 +938,7 @@ pub fn type_expr(
                     let _ = generate_address();
                 }
             }
-            eta.insert(ell, ss)?;
+            eta.insert(ell, ss);
             mu.insert(name.clone(), ell);
 
             if display {
@@ -1041,7 +953,8 @@ pub fn type_expr(
             reset_counter((mu.max_addr() as usize) + 1);
             ctx.pop_level(mu, eta);
 
-            eta.force_drop(&ell, &te1.extract_type(), span.clone())?;
+            eta.let_go(&ell, &te1.extract_type(), span.clone())?;
+
             for (s, s_span) in s2.iter() {
                 for referred in s.extract_referred_addresses() {
                     if referred >= ell {
@@ -1062,13 +975,6 @@ pub fn type_expr(
             ))
         }
         EExpr::Assign((lhs, lhs_span), e2) => {
-            if display {
-                cls();
-                diagnostics(ctx, eta, mu);
-                file.reveal(e2.1.end);
-                pause();
-            }
-
             let (tlhs, ell) = type_lhs((lhs.clone(), lhs_span.clone()), ctx, eta, mu)?;
             let tau_lhs = match tlhs.extract_type() {
                 Type::Ref(false, _) => {
@@ -1097,9 +1003,15 @@ pub fn type_expr(
                     assert!(texprs.len() == ss.len() - 1);
                 }
 
-                eta.sudo_drop(&ell, &tau_lhs);
+                eta.sudo_drop(&ell, &tau_lhs, span.clone())?;
+                eta.insert(ell, ss);
 
-                eta.insert(ell, ss)?;
+                if display {
+                    cls();
+                    diagnostics(ctx, eta, mu);
+                    file.reveal(e2_span.end);
+                    pause();
+                }
 
                 Ok((
                     TExpr::Assign(
